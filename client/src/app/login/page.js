@@ -7,7 +7,7 @@ import toast from 'react-hot-toast';
 import { HiEye, HiEyeOff } from 'react-icons/hi';
 
 export default function LoginPage() {
-  const [form, setForm] = useState({ userId: '', password: '', branchCode: '' });
+  const [form, setForm] = useState({ userId: '', password: '', branchCode: '', role: 'Clerk' });
   const [showPass, setShowPass] = useState(false);
   const [loading, setLoading] = useState(false);
   const { loginUser } = useAuth();
@@ -24,7 +24,7 @@ export default function LoginPage() {
       const res = await login(form);
       loginUser(res.data.user, res.data.token);
       toast.success(`Welcome, ${res.data.user.name}!`);
-      
+
       if (res.data.user.role === 'Admin') {
         router.push('/dashboard/admin');
       } else {
@@ -63,6 +63,23 @@ export default function LoginPage() {
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-5 mt-2">
+          {/* Role */}
+          <div>
+            <label className="neo-label">Role</label>
+            <div className="relative">
+              <select
+                className="neo-input appearance-none bg-no-repeat bg-right"
+                style={{ backgroundImage: `url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e")`, backgroundPosition: `right 0.5rem center`, backgroundSize: `1.5em 1.5em` }}
+                value={form.role}
+                onChange={(e) => setForm({ ...form, role: e.target.value })}
+              >
+                <option value="Clerk">Clerk</option>
+                <option value="Manager">Manager</option>
+                <option value="Admin">Admin</option>
+              </select>
+            </div>
+          </div>
+
           {/* User ID */}
           <div>
             <label className="neo-label">User ID</label>

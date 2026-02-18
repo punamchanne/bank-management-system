@@ -18,15 +18,22 @@ router.get('/', protect, async (req, res) => {
     if (status) query.status = status;
     if (startDate || endDate) {
       query.createdAt = {};
-      if (startDate) query.createdAt.$gte = new Date(startDate);
-      if (endDate) query.createdAt.$lte = new Date(endDate + 'T23:59:59');
+      if (startDate && startDate !== 'undefined' && !isNaN(new Date(startDate))) {
+        query.createdAt.$gte = new Date(startDate);
+      }
+      if (endDate && endDate !== 'undefined' && !isNaN(new Date(endDate))) {
+        query.createdAt.$lte = new Date(endDate + 'T23:59:59');
+      }
     }
+
+    const pageNum = parseInt(page) || 1;
+    const limitNum = parseInt(limit) || 30;
 
     const total = await Transaction.countDocuments(query);
     const transactions = await Transaction.find(query)
       .sort('-createdAt')
-      .skip((page - 1) * limit)
-      .limit(parseInt(limit));
+      .skip((pageNum - 1) * limitNum)
+      .limit(limitNum);
 
     res.json({
       success: true,
@@ -36,6 +43,7 @@ router.get('/', protect, async (req, res) => {
       data: transactions
     });
   } catch (error) {
+    console.error('Error in GET /api/transactions:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 });
@@ -54,11 +62,15 @@ router.post('/deposit', protect, async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid amount' });
     }
 
-    const currentBalance = parseFloat(account.balance.toString());
-    const newBalance = currentBalance + parseFloat(amount);
+    const isPending = req.user.role === 'Clerk';
+    const status = isPending ? 'Pending' : 'Success';
+    let newBalance = parseFloat(account.balance.toString());
 
-    account.balance = mongoose.Types.Decimal128.fromString(newBalance.toFixed(2));
-    await account.save();
+    if (!isPending) {
+      newBalance += parseFloat(amount);
+      account.balance = mongoose.Types.Decimal128.fromString(newBalance.toFixed(2));
+      await account.save();
+    }
 
     const transaction = await Transaction.create({
       accountId,
@@ -67,8 +79,11 @@ router.post('/deposit', protect, async (req, res) => {
       amount: mongoose.Types.Decimal128.fromString(amount.toString()),
       description,
       chequeNumber,
+      chequeBank: req.body.chequeBank,
+      chequeBranch: req.body.chequeBranch,
+      chequeDate: req.body.chequeDate ? new Date(req.body.chequeDate) : undefined,
       chequeStatus: mode === 'Cheque' ? 'Received' : 'N/A',
-      status: 'Success',
+      status,
       branchCode: req.user.branchCode,
       performedBy: req.user.userId
     });
@@ -98,9 +113,15 @@ router.post('/withdraw', protect, async (req, res) => {
       return res.status(400).json({ success: false, message: 'Insufficient balance' });
     }
 
-    const newBalance = currentBalance - parseFloat(amount);
-    account.balance = mongoose.Types.Decimal128.fromString(newBalance.toFixed(2));
-    await account.save();
+    const isPending = req.user.role === 'Clerk';
+    const status = isPending ? 'Pending' : 'Success';
+    let newBalance = currentBalance;
+
+    if (!isPending) {
+      newBalance -= parseFloat(amount);
+      account.balance = mongoose.Types.Decimal128.fromString(newBalance.toFixed(2));
+      await account.save();
+    }
 
     const transaction = await Transaction.create({
       accountId,
@@ -108,7 +129,7 @@ router.post('/withdraw', protect, async (req, res) => {
       mode: mode || 'Cash',
       amount: mongoose.Types.Decimal128.fromString(amount.toString()),
       description,
-      status: 'Success',
+      status,
       branchCode: req.user.branchCode,
       performedBy: req.user.userId
     });
@@ -147,14 +168,20 @@ router.post('/transfer', protect, async (req, res) => {
       return res.status(400).json({ success: false, message: 'Insufficient balance' });
     }
 
-    // Debit sender
-    senderAccount.balance = mongoose.Types.Decimal128.fromString((senderBalance - amount).toFixed(2));
-    await senderAccount.save();
+    const isPending = req.user.role === 'Clerk';
+    const status = isPending ? 'Pending' : 'Success';
+    let newSenderBalance = senderBalance;
+    let newReceiverBalance = parseFloat(receiverAccount.balance.toString());
 
-    // Credit receiver
-    const receiverBalance = parseFloat(receiverAccount.balance.toString());
-    receiverAccount.balance = mongoose.Types.Decimal128.fromString((receiverBalance + amount).toFixed(2));
-    await receiverAccount.save();
+    if (!isPending) {
+      newSenderBalance -= parseFloat(amount);
+      senderAccount.balance = mongoose.Types.Decimal128.fromString(newSenderBalance.toFixed(2));
+      await senderAccount.save();
+
+      newReceiverBalance += parseFloat(amount);
+      receiverAccount.balance = mongoose.Types.Decimal128.fromString(newReceiverBalance.toFixed(2));
+      await receiverAccount.save();
+    }
 
     const transaction = await Transaction.create({
       accountId,
@@ -163,7 +190,7 @@ router.post('/transfer', protect, async (req, res) => {
       mode: mode || 'NEFT',
       amount: mongoose.Types.Decimal128.fromString(amount.toString()),
       description,
-      status: 'Success',
+      status,
       branchCode: req.user.branchCode,
       performedBy: req.user.userId
     });
@@ -171,9 +198,93 @@ router.post('/transfer', protect, async (req, res) => {
     res.status(201).json({
       success: true,
       data: transaction,
-      senderBalance: senderBalance - amount,
-      receiverBalance: receiverBalance + amount
+      senderBalance: newSenderBalance,
+      receiverBalance: newReceiverBalance
     });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// PUT /api/transactions/:id/status
+router.put('/:id/status', protect, async (req, res) => {
+  try {
+    if (req.user.role !== 'Manager' && req.user.role !== 'Admin') {
+      return res.status(403).json({ success: false, message: 'Not authorized to approve transactions' });
+    }
+
+    const { status } = req.body; // 'Success' or 'Rejected'
+    const transaction = await Transaction.findById(req.params.id);
+
+    if (!transaction) {
+      return res.status(404).json({ success: false, message: 'Transaction not found' });
+    }
+
+    if (transaction.status !== 'Pending') {
+      return res.status(400).json({ success: false, message: 'Transaction is not pending' });
+    }
+
+    if (status === 'Rejected') {
+      transaction.status = 'Rejected';
+      await transaction.save();
+      return res.json({ success: true, data: transaction });
+    }
+
+    if (status === 'Success') {
+      // Process logic based on type
+      if (transaction.type === 'Deposit') {
+        const account = await Account.findOne({ accountId: transaction.accountId });
+        if (!account) return res.status(404).json({ success: false, message: 'Account not found' });
+
+        const currentBalance = parseFloat(account.balance.toString());
+        const amount = parseFloat(transaction.amount.toString());
+        account.balance = mongoose.Types.Decimal128.fromString((currentBalance + amount).toFixed(2));
+        await account.save();
+
+      } else if (transaction.type === 'Withdrawal') {
+        const account = await Account.findOne({ accountId: transaction.accountId });
+        if (!account) return res.status(404).json({ success: false, message: 'Account not found' });
+
+        const currentBalance = parseFloat(account.balance.toString());
+        const amount = parseFloat(transaction.amount.toString());
+
+        if (currentBalance < amount) {
+          return res.status(400).json({ success: false, message: 'Insufficient balance for approval' });
+        }
+
+        account.balance = mongoose.Types.Decimal128.fromString((currentBalance - amount).toFixed(2));
+        await account.save();
+
+      } else if (transaction.type === 'Transfer') {
+        const senderAccount = await Account.findOne({ accountId: transaction.accountId });
+        const receiverAccount = await Account.findOne({ accountId: transaction.beneficiaryAccountId });
+
+        if (!senderAccount || !receiverAccount) {
+          return res.status(404).json({ success: false, message: 'One or both accounts not found' });
+        }
+
+        const senderBalance = parseFloat(senderAccount.balance.toString());
+        const receiverBalance = parseFloat(receiverAccount.balance.toString());
+        const amount = parseFloat(transaction.amount.toString());
+
+        if (senderBalance < amount) {
+          return res.status(400).json({ success: false, message: 'Insufficient sender balance for approval' });
+        }
+
+        senderAccount.balance = mongoose.Types.Decimal128.fromString((senderBalance - amount).toFixed(2));
+        await senderAccount.save();
+
+        receiverAccount.balance = mongoose.Types.Decimal128.fromString((receiverBalance + amount).toFixed(2));
+        await receiverAccount.save();
+      }
+
+      transaction.status = 'Success';
+      await transaction.save();
+      return res.json({ success: true, data: transaction });
+    }
+
+    return res.status(400).json({ success: false, message: 'Invalid status' });
+
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

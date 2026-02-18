@@ -37,6 +37,11 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ success: false, message: 'Branch code mismatch' });
     }
 
+    const { role } = req.body;
+    if (role && user.role !== role) {
+      return res.status(401).json({ success: false, message: 'Role mismatch' });
+    }
+
     const token = generateToken(user._id);
 
     res.json({

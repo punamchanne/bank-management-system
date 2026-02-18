@@ -40,10 +40,20 @@ export default function DashboardLayout({ children }) {
     { href: '/dashboard', label: 'Dashboard', icon: HiOutlineHome },
     { href: '/dashboard/customers', label: 'Customers (CIF)', icon: HiOutlineUserGroup },
     { href: '/dashboard/accounts', label: 'Accounts', icon: HiOutlineCreditCard },
-    { href: '/dashboard/transactions', label: 'Transactions', icon: HiOutlineSwitchHorizontal },
-    { href: '/dashboard/loans', label: 'Loans', icon: HiOutlineCash },
-    ...(user.role === 'Admin' ? [{ href: '/dashboard/reports', label: 'Reports', icon: HiOutlineDocumentReport }] : []),
   ];
+
+  if (user.role !== 'Admin') {
+    mainLinks.push(
+      { href: '/dashboard/transactions', label: 'Transactions', icon: HiOutlineSwitchHorizontal },
+      { href: '/dashboard/loans', label: 'Loans', icon: HiOutlineCash }
+    );
+  }
+
+  if (user.role === 'Manager') {
+    mainLinks.push(
+      { href: '/dashboard/reports', label: 'Reports', icon: HiOutlineDocumentReport }
+    );
+  }
 
   const adminLinks = user.role === 'Admin' ? [
     { href: '/dashboard/admin', label: 'Admin Panel', icon: HiOutlineCog },

@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { getCustomers, createCustomer } from '@/lib/api';
 import toast from 'react-hot-toast';
+import { useAuth } from '@/context/AuthContext';
 import { HiOutlinePlus, HiOutlineSearch, HiOutlineX } from 'react-icons/hi';
 
 export default function CustomersPage() {
@@ -12,6 +13,7 @@ export default function CustomersPage() {
   const [form, setForm] = useState({
     name: '', dob: '', aadhar: '', pan: '', address: '', mobile: '', email: ''
   });
+  const { user } = useAuth();
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -60,11 +62,13 @@ export default function CustomersPage() {
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-800">Customer Management</h1>
-          <p className="text-sm text-gray-400 mt-1">Create and manage Customer Information Files (CIF)</p>
+          <p className="text-sm text-gray-400 mt-1">Manage Customer Information Files (CIF)</p>
         </div>
-        <button onClick={() => setShowForm(true)} className="neo-btn-primary flex items-center gap-2">
-          <HiOutlinePlus className="w-5 h-5" /> New Customer
-        </button>
+        {user?.role === 'Manager' && (
+          <button onClick={() => setShowForm(true)} className="neo-btn-primary flex items-center gap-2">
+            <HiOutlinePlus className="w-5 h-5" /> New Customer
+          </button>
+        )}
       </div>
 
       {/* Search */}

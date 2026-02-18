@@ -57,6 +57,7 @@ export const getTransactions = (params) => API.get('/transactions', { params });
 export const deposit = (data) => API.post('/transactions/deposit', data);
 export const withdraw = (data) => API.post('/transactions/withdraw', data);
 export const transfer = (data) => API.post('/transactions/transfer', data);
+export const updateTransactionStatus = (id, data) => API.put(`/transactions/${id}/status`, data);
 
 // Loans
 export const getLoans = (params) => API.get('/loans', { params });
@@ -71,7 +72,8 @@ export const getCashReport = (params) => API.get('/reports/cash', { params });
 export const getOnlineReport = (params) => API.get('/reports/online', { params });
 export const getChequeReport = (params) => API.get('/reports/cheque', { params });
 export const getGlWalletReport = (params) => API.get('/reports/gl-wallet', { params });
-export const getEodReport = () => API.get('/reports/eod');
+export const getEodReport = (params) => API.get('/reports/eod', { params });
+export const getStatsReport = (params) => API.get('/reports/stats', { params });
 
 // Branches
 export const getBranches = () => API.get('/branches');

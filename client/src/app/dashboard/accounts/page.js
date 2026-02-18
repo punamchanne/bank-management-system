@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { getAccounts, createAccount, getCustomer } from '@/lib/api';
 import toast from 'react-hot-toast';
+import { useAuth } from '@/context/AuthContext';
 import { HiOutlinePlus, HiOutlineSearch, HiOutlineX } from 'react-icons/hi';
 
 export default function AccountsPage() {
@@ -12,6 +13,7 @@ export default function AccountsPage() {
   const [form, setForm] = useState({ cifId: '', accountType: 'Savings', initialDeposit: '', nominee: '' });
   const [saving, setSaving] = useState(false);
   const [customerInfo, setCustomerInfo] = useState(null);
+  const { user } = useAuth();
   const [fetchingCif, setFetchingCif] = useState(false);
 
   useEffect(() => { fetchAccounts(); }, []);
@@ -82,11 +84,13 @@ export default function AccountsPage() {
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-800">Account Management</h1>
-          <p className="text-sm text-gray-400 mt-1">Open and manage bank accounts</p>
+          <p className="text-sm text-gray-400 mt-1">Manage bank accounts</p>
         </div>
-        <button onClick={() => setShowForm(true)} className="neo-btn-primary flex items-center gap-2">
-          <HiOutlinePlus className="w-5 h-5" /> Open Account
-        </button>
+        {user?.role === 'Manager' && (
+          <button onClick={() => setShowForm(true)} className="neo-btn-primary flex items-center gap-2">
+            <HiOutlinePlus className="w-5 h-5" /> Open Account
+          </button>
+        )}
       </div>
 
       <form onSubmit={handleSearch} className="neo-card !p-4">

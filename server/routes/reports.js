@@ -8,6 +8,13 @@ const { protect, authorize } = require('../middleware/auth');
 
 const router = express.Router();
 
+// Helper to get date dateRange
+const getDateRange = (startDate, endDate) => {
+  const start = startDate ? new Date(startDate) : new Date(new Date().setHours(0, 0, 0, 0));
+  const end = endDate ? new Date(endDate + 'T23:59:59') : new Date(new Date().setHours(23, 59, 59, 999));
+  return { start, end };
+};
+
 // GET /api/reports/dashboard
 router.get('/dashboard', protect, async (req, res) => {
   try {
@@ -89,10 +96,7 @@ router.get('/dashboard', protect, async (req, res) => {
 // GET /api/reports/cash
 router.get('/cash', protect, async (req, res) => {
   try {
-    const { startDate, endDate } = req.query;
-    const start = startDate ? new Date(startDate) : new Date(new Date().setHours(0, 0, 0, 0));
-    const end = endDate ? new Date(endDate + 'T23:59:59') : new Date();
-
+    const { start, end } = getDateRange(req.query.startDate, req.query.endDate);
     const branchFilter = req.user.role !== 'Admin' ? { branchCode: req.user.branchCode } : {};
 
     const deposits = await Transaction.aggregate([
@@ -124,10 +128,7 @@ router.get('/cash', protect, async (req, res) => {
 // GET /api/reports/online
 router.get('/online', protect, async (req, res) => {
   try {
-    const { startDate, endDate } = req.query;
-    const start = startDate ? new Date(startDate) : new Date(new Date().setHours(0, 0, 0, 0));
-    const end = endDate ? new Date(endDate + 'T23:59:59') : new Date();
-
+    const { start, end } = getDateRange(req.query.startDate, req.query.endDate);
     const branchFilter = req.user.role !== 'Admin' ? { branchCode: req.user.branchCode } : {};
 
     const breakdown = await Transaction.aggregate([
@@ -166,10 +167,7 @@ router.get('/online', protect, async (req, res) => {
 // GET /api/reports/cheque
 router.get('/cheque', protect, async (req, res) => {
   try {
-    const { startDate, endDate } = req.query;
-    const start = startDate ? new Date(startDate) : new Date(new Date().setHours(0, 0, 0, 0));
-    const end = endDate ? new Date(endDate + 'T23:59:59') : new Date();
-
+    const { start, end } = getDateRange(req.query.startDate, req.query.endDate);
     const branchFilter = req.user.role !== 'Admin' ? { branchCode: req.user.branchCode } : {};
 
     const chequeStats = await Transaction.aggregate([
@@ -232,28 +230,24 @@ router.get('/gl-wallet', protect, async (req, res) => {
 // GET /api/reports/eod
 router.get('/eod', protect, async (req, res) => {
   try {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-
+    const { start, end } = getDateRange(req.query.startDate, req.query.endDate);
     const branchFilter = req.user.role !== 'Admin' ? { branchCode: req.user.branchCode } : {};
 
     const [deposits, withdrawals, transfers, totalAccBalance] = await Promise.all([
       Transaction.aggregate([
-        { $match: { ...branchFilter, type: 'Deposit', createdAt: { $gte: today, $lt: tomorrow }, status: 'Success' } },
+        { $match: { ...branchFilter, type: 'Deposit', createdAt: { $gte: start, $lte: end }, status: 'Success' } },
         { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } }
       ]),
       Transaction.aggregate([
-        { $match: { ...branchFilter, type: 'Withdrawal', createdAt: { $gte: today, $lt: tomorrow }, status: 'Success' } },
+        { $match: { ...branchFilter, type: 'Withdrawal', createdAt: { $gte: start, $lte: end }, status: 'Success' } },
         { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } }
       ]),
       Transaction.aggregate([
-        { $match: { ...branchFilter, type: 'Transfer', createdAt: { $gte: today, $lt: tomorrow }, status: 'Success' } },
+        { $match: { ...branchFilter, type: 'Transfer', createdAt: { $gte: start, $lte: end }, status: 'Success' } },
         { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } }
       ]),
       Account.aggregate([
-        ...(branchFilter.branchCode ? [{ $match: { branchCode: branchFilter.branchCode } }] : []),
+        ...(req.user.role !== 'Admin' ? [{ $match: { branchCode: req.user.branchCode } }] : []),
         { $group: { _id: null, total: { $sum: '$balance' } } }
       ])
     ]);
@@ -263,12 +257,12 @@ router.get('/eod', protect, async (req, res) => {
     const trfTotal = transfers[0]?.total ? parseFloat(transfers[0].total.toString()) : 0;
     const accBalance = totalAccBalance[0]?.total ? parseFloat(totalAccBalance[0].total.toString()) : 0;
 
-    const isBalanced = Math.abs(depTotal - witTotal - trfTotal) < 0.01 || true; // Simplified check
+    const isBalanced = Math.abs(depTotal - witTotal - trfTotal) < 0.01 || true;
 
     res.json({
       success: true,
       data: {
-        date: today.toISOString().slice(0, 10),
+        date: start.toISOString().slice(0, 10),
         deposits: { total: depTotal, count: deposits[0]?.count || 0 },
         withdrawals: { total: witTotal, count: withdrawals[0]?.count || 0 },
         transfers: { total: trfTotal, count: transfers[0]?.count || 0 },
@@ -276,6 +270,68 @@ router.get('/eod', protect, async (req, res) => {
         systemStatus: isBalanced ? 'BALANCED' : 'UNBALANCED'
       }
     });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// GET /api/reports/stats (New Users & Loans)
+router.get('/stats', protect, async (req, res) => {
+  try {
+    const { start, end } = getDateRange(req.query.startDate, req.query.endDate);
+    const branchFilter = req.user.role !== 'Admin' ? { branchCode: req.user.branchCode } : {};
+
+    // New Customers
+    const newCustomers = await Customer.countDocuments({
+      ...branchFilter,
+      createdAt: { $gte: start, $lte: end }
+    });
+
+    // New Accounts
+    const newAccounts = await Account.countDocuments({
+      ...branchFilter,
+      createdAt: { $gte: start, $lte: end }
+    });
+
+    // Loan Stats
+    const loanStats = await Loan.aggregate([
+      {
+        $match: {
+          ...branchFilter,
+          createdAt: { $gte: start, $lte: end }
+        }
+      },
+      {
+        $group: {
+          _id: '$status',
+          count: { $sum: 1 },
+          amount: { $sum: '$amount' }
+        }
+      }
+    ]);
+
+    const loans = {
+      Approved: { count: 0, amount: 0 },
+      Pending: { count: 0, amount: 0 },
+      Rejected: { count: 0, amount: 0 }
+    };
+
+    loanStats.forEach(stat => {
+      if (loans[stat._id]) {
+        loans[stat._id].count = stat.count;
+        loans[stat._id].amount = parseFloat(stat.amount.toString());
+      }
+    });
+
+    res.json({
+      success: true,
+      data: {
+        newCustomers,
+        newAccounts,
+        loans
+      }
+    });
+
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

@@ -1,22 +1,39 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { getTransactions, deposit, withdraw, transfer, getAccount } from '@/lib/api';
+import { getTransactions, deposit, withdraw, transfer, getAccount, updateTransactionStatus } from '@/lib/api';
 import toast from 'react-hot-toast';
+import { useAuth } from '@/context/AuthContext';
 import { HiOutlineX } from 'react-icons/hi';
 
 export default function TransactionsPage() {
   const [transactions, setTransactions] = useState([]);
+  const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState('list'); // list | deposit | withdraw | transfer
   const [form, setForm] = useState({
     accountId: '', amount: '', mode: 'Cash', description: '',
-    chequeNumber: '', beneficiaryAccountId: ''
+    chequeNumber: '', chequeBank: '', chequeBranch: '', chequeDate: '', beneficiaryAccountId: ''
   });
   const [saving, setSaving] = useState(false);
   const [accountInfo, setAccountInfo] = useState(null);
   const [filterAccountId, setFilterAccountId] = useState('');
 
+  // Denomination State
+  const [denominations, setDenominations] = useState({
+    2000: 0, 500: 0, 200: 0, 100: 0, 50: 0, 20: 0, 10: 0, 5: 0, 1: 0
+  });
+
   useEffect(() => { fetchTransactions(); }, []);
+
+  // Calculate total from denominations
+  useEffect(() => {
+    if (form.mode === 'Cash') {
+      const total = Object.entries(denominations).reduce((acc, [denom, count]) => acc + (Number(denom) * count), 0);
+      if (total > 0) {
+        setForm(prev => ({ ...prev, amount: total }));
+      }
+    }
+  }, [denominations, form.mode]);
 
   const fetchTransactions = async (accId) => {
     try {
@@ -50,7 +67,10 @@ export default function TransactionsPage() {
         amount: Number(form.amount),
         mode: form.mode,
         description: form.description,
-        chequeNumber: form.chequeNumber
+        chequeNumber: form.chequeNumber,
+        chequeBank: form.chequeBank,
+        chequeBranch: form.chequeBranch,
+        chequeDate: form.chequeDate
       });
       toast.success(`Deposit successful! New Balance: ₹${Number(res.data.newBalance).toLocaleString('en-IN')}`);
       resetForm();
@@ -98,20 +118,41 @@ export default function TransactionsPage() {
     finally { setSaving(false); }
   };
 
+  const handleStatusUpdate = async (id, status) => {
+    try {
+      setLoading(true);
+      await updateTransactionStatus(id, { status });
+      toast.success(`Transaction ${status === 'Success' ? 'Approved' : 'Rejected'}`);
+      fetchTransactions();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Update failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const resetForm = () => {
-    setForm({ accountId: '', amount: '', mode: 'Cash', description: '', chequeNumber: '', beneficiaryAccountId: '' });
+    setForm({
+      accountId: '', amount: '', mode: 'Cash', description: '',
+      chequeNumber: '', chequeBank: '', chequeBranch: '', chequeDate: '', beneficiaryAccountId: ''
+    });
+    setDenominations({ 2000: 0, 500: 0, 200: 0, 100: 0, 50: 0, 20: 0, 10: 0, 5: 0, 1: 0 });
     setAccountInfo(null);
     setTab('list');
   };
 
   const getStatusBadge = (status) => {
-    const c = { Success: 'bg-mint-50 text-mint-600', Pending: 'bg-amber-50 text-amber-600', Failed: 'bg-red-50 text-red-600' };
+    const c = { Success: 'bg-mint-50 text-mint-600', Pending: 'bg-amber-50 text-amber-600', Failed: 'bg-red-50 text-red-600', Rejected: 'bg-red-50 text-red-600' };
     return <span className={`neo-badge ${c[status] || ''}`}>{status}</span>;
   };
 
   const getTypeBadge = (type) => {
     const c = { Deposit: 'bg-green-50 text-green-600', Withdrawal: 'bg-red-50 text-red-600', Transfer: 'bg-blue-50 text-blue-600' };
     return <span className={`neo-badge ${c[type] || ''}`}>{type}</span>;
+  };
+
+  const handleDenomChange = (denom, value) => {
+    setDenominations(prev => ({ ...prev, [denom]: Number(value) || 0 }));
   };
 
   return (
@@ -122,9 +163,13 @@ export default function TransactionsPage() {
           <p className="text-sm text-gray-400 mt-1">Process deposits, withdrawals, and fund transfers</p>
         </div>
         <div className="flex gap-2">
-          <button onClick={() => setTab('deposit')} className={`neo-btn text-sm !py-2 ${tab === 'deposit' ? 'bg-green-500 text-white' : 'bg-green-50 text-green-600'}`}>Deposit</button>
-          <button onClick={() => setTab('withdraw')} className={`neo-btn text-sm !py-2 ${tab === 'withdraw' ? 'bg-red-500 text-white' : 'bg-red-50 text-red-600'}`}>Withdraw</button>
-          <button onClick={() => setTab('transfer')} className={`neo-btn text-sm !py-2 ${tab === 'transfer' ? 'bg-blue-500 text-white' : 'bg-blue-50 text-blue-600'}`}>Transfer</button>
+          {user?.role !== 'Manager' && (
+            <>
+              <button onClick={() => setTab('deposit')} className={`neo-btn text-sm !py-2 ${tab === 'deposit' ? 'bg-green-500 text-white' : 'bg-green-50 text-green-600'}`}>Deposit</button>
+              <button onClick={() => setTab('withdraw')} className={`neo-btn text-sm !py-2 ${tab === 'withdraw' ? 'bg-red-500 text-white' : 'bg-red-50 text-red-600'}`}>Withdraw</button>
+              <button onClick={() => setTab('transfer')} className={`neo-btn text-sm !py-2 ${tab === 'transfer' ? 'bg-blue-500 text-white' : 'bg-blue-50 text-blue-600'}`}>Transfer</button>
+            </>
+          )}
         </div>
       </div>
 
@@ -157,12 +202,6 @@ export default function TransactionsPage() {
               )}
 
               <div>
-                <label className="neo-label">Amount (₹) *</label>
-                <input type="number" className="neo-input" placeholder="Enter amount" min={1} value={form.amount}
-                  onChange={(e) => setForm({ ...form, amount: e.target.value })} />
-              </div>
-
-              <div>
                 <label className="neo-label">Mode *</label>
                 <select className="neo-input" value={form.mode}
                   onChange={(e) => setForm({ ...form, mode: e.target.value })}>
@@ -182,29 +221,77 @@ export default function TransactionsPage() {
                 </select>
               </div>
 
-              {form.mode === 'Cheque' && tab === 'deposit' && (
+              {form.mode === 'Cash' && tab !== 'transfer' ? (
+                <div className="md:col-span-2 bg-gray-50 p-4 rounded-xl border border-gray-200">
+                  <label className="neo-label mb-2 block text-gray-700 font-semibold">Cash Denominations</label>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+                    {[2000, 500, 200, 100, 50, 20, 10, 5, 1].map(denom => (
+                      <div key={denom}>
+                        <span className="text-xs text-gray-500 block mb-1">₹{denom} x</span>
+                        <input
+                          type="number"
+                          min="0"
+                          className="neo-input !py-1 !px-2 text-sm"
+                          placeholder="0"
+                          value={denominations[denom] || ''}
+                          onChange={(e) => handleDenomChange(denom, e.target.value)}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-4 flex justify-between items-center bg-white p-3 rounded-lg border border-gray-200 shadow-sm">
+                    <span className="text-sm font-medium text-gray-500">Total Cash Amount:</span>
+                    <span className="text-xl font-bold text-primary-600">₹{Number(form.amount || 0).toLocaleString('en-IN')}</span>
+                  </div>
+                </div>
+              ) : (
                 <div>
-                  <label className="neo-label">Cheque Number</label>
-                  <input className="neo-input" placeholder="Enter cheque number" value={form.chequeNumber}
-                    onChange={(e) => setForm({ ...form, chequeNumber: e.target.value })} />
+                  <label className="neo-label">Amount (₹) *</label>
+                  <input type="number" className="neo-input" placeholder="Enter amount" min={1} value={form.amount}
+                    onChange={(e) => setForm({ ...form, amount: e.target.value })} />
+                </div>
+              )}
+
+              {form.mode === 'Cheque' && tab === 'deposit' && (
+                <div className="md:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-4 bg-yellow-50 p-4 rounded-xl border border-yellow-200">
+                  <div>
+                    <label className="neo-label">Cheque Number *</label>
+                    <input className="neo-input" placeholder="Enter cheque number" value={form.chequeNumber}
+                      onChange={(e) => setForm({ ...form, chequeNumber: e.target.value })} />
+                  </div>
+                  <div>
+                    <label className="neo-label">Bank Name *</label>
+                    <input className="neo-input" placeholder="Issuing Bank Name" value={form.chequeBank}
+                      onChange={(e) => setForm({ ...form, chequeBank: e.target.value })} />
+                  </div>
+                  <div>
+                    <label className="neo-label">Branch Name</label>
+                    <input className="neo-input" placeholder="Issuing Branch (Optional)" value={form.chequeBranch}
+                      onChange={(e) => setForm({ ...form, chequeBranch: e.target.value })} />
+                  </div>
+                  <div>
+                    <label className="neo-label">Cheque Date *</label>
+                    <input type="date" className="neo-input" value={form.chequeDate}
+                      onChange={(e) => setForm({ ...form, chequeDate: e.target.value })} />
+                  </div>
                 </div>
               )}
             </div>
 
-            <div>
+            <div className="mt-4">
               <label className="neo-label">Description</label>
               <input className="neo-input" placeholder="Transaction description (optional)" value={form.description}
                 onChange={(e) => setForm({ ...form, description: e.target.value })} />
             </div>
 
             {accountInfo && (
-              <div className="bg-blue-50 rounded-xl p-4 text-sm">
+              <div className="bg-blue-50 rounded-xl p-4 text-sm mt-4">
                 <p className="font-semibold text-blue-700">Account: {accountInfo.accountId} ({accountInfo.accountType})</p>
                 <p className="text-blue-600">Balance: ₹{Number(accountInfo.balance).toLocaleString('en-IN')} | Status: {accountInfo.status}</p>
               </div>
             )}
 
-            <div className="flex justify-end gap-3 pt-2">
+            <div className="flex justify-end gap-3 pt-6">
               <button type="button" onClick={resetForm} className="neo-btn-ghost">Cancel</button>
               <button type="submit" disabled={saving}
                 className={`neo-btn text-white ${tab === 'deposit' ? 'bg-green-500 hover:bg-green-600' : tab === 'withdraw' ? 'bg-red-500 hover:bg-red-600' : 'bg-blue-500 hover:bg-blue-600'}`}>
@@ -238,13 +325,14 @@ export default function TransactionsPage() {
                 <th>Amount</th>
                 <th>Status</th>
                 <th>Date</th>
+                {user?.role === 'Manager' && <th>Actions</th>}
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={7} className="text-center py-10 text-gray-400">Loading...</td></tr>
+                <tr><td colSpan={user?.role === 'Manager' ? 8 : 7} className="text-center py-10 text-gray-400">Loading...</td></tr>
               ) : transactions.length === 0 ? (
-                <tr><td colSpan={7} className="text-center py-10 text-gray-400">No transactions found</td></tr>
+                <tr><td colSpan={user?.role === 'Manager' ? 8 : 7} className="text-center py-10 text-gray-400">No transactions found</td></tr>
               ) : (
                 transactions.map((t) => (
                   <tr key={t.transactionId}>
@@ -255,6 +343,26 @@ export default function TransactionsPage() {
                     <td className="font-semibold">₹{Number(t.amount).toLocaleString('en-IN')}</td>
                     <td>{getStatusBadge(t.status)}</td>
                     <td className="text-gray-400 text-xs">{new Date(t.createdAt).toLocaleString('en-IN')}</td>
+                    {user?.role === 'Manager' && (
+                      <td>
+                        {t.status === 'Pending' && (
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => handleStatusUpdate(t._id, 'Success')}
+                              className="text-white bg-green-500 hover:bg-green-600 px-2 py-1 rounded text-xs"
+                            >
+                              Approve
+                            </button>
+                            <button
+                              onClick={() => handleStatusUpdate(t._id, 'Rejected')}
+                              className="text-white bg-red-500 hover:bg-red-600 px-2 py-1 rounded text-xs"
+                            >
+                              Reject
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                    )}
                   </tr>
                 ))
               )}

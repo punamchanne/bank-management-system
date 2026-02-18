@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { getDashboard } from '@/lib/api';
+import { useAuth } from '@/context/AuthContext';
 import {
   HiOutlineCash, HiOutlineGlobe, HiOutlineCreditCard,
   HiOutlineDocumentText, HiOutlineUserGroup, HiOutlineTrendingUp
@@ -8,6 +9,7 @@ import {
 
 export default function DashboardPage() {
   const [stats, setStats] = useState(null);
+  const { user } = useAuth();
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -86,10 +88,7 @@ export default function DashboardPage() {
   return (
     <div className="space-y-6">
       {/* Page Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-gray-800">Dashboard Overview</h1>
-        <p className="text-sm text-gray-400 mt-1">Real-time summary of your branch operations</p>
-      </div>
+
 
       {/* Stats Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
@@ -113,25 +112,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Quick Actions */}
-      <div className="neo-card">
-        <h3 className="text-sm font-semibold text-gray-700 mb-4">Quick Actions</h3>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          {[
-            { label: 'New Customer', href: '/dashboard/customers', color: 'bg-blue-50 text-blue-600 hover:bg-blue-100' },
-            { label: 'Open Account', href: '/dashboard/accounts', color: 'bg-mint-50 text-mint-600 hover:bg-mint-100' },
-            { label: 'New Transaction', href: '/dashboard/transactions', color: 'bg-purple-50 text-purple-600 hover:bg-purple-100' },
-            { label: 'Apply Loan', href: '/dashboard/loans', color: 'bg-amber-50 text-amber-600 hover:bg-amber-100' },
-          ].map((action, i) => (
-            <a
-              key={i}
-              href={action.href}
-              className={`flex items-center justify-center px-4 py-3 rounded-xl text-sm font-medium transition-all duration-200 ${action.color}`}
-            >
-              {action.label}
-            </a>
-          ))}
-        </div>
-      </div>
+
     </div>
   );
 }

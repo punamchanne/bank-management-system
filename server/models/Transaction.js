@@ -37,6 +37,17 @@ const transactionSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  chequeBank: {
+    type: String,
+    trim: true
+  },
+  chequeBranch: {
+    type: String,
+    trim: true
+  },
+  chequeDate: {
+    type: Date
+  },
   chequeStatus: {
     type: String,
     enum: ['Received', 'Passed', 'Rejected', 'N/A'],
@@ -44,7 +55,7 @@ const transactionSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['Success', 'Pending', 'Failed'],
+    enum: ['Success', 'Pending', 'Failed', 'Rejected'],
     default: 'Success'
   },
   branchCode: {

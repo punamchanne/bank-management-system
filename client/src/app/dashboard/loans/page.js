@@ -2,10 +2,12 @@
 import { useEffect, useState } from 'react';
 import { getLoans, createLoan, calculateEmi, updateLoanStatus } from '@/lib/api';
 import toast from 'react-hot-toast';
+import { useAuth } from '@/context/AuthContext';
 import { HiOutlinePlus, HiOutlineX, HiOutlineCalculator } from 'react-icons/hi';
 
 export default function LoansPage() {
   const [loans, setLoans] = useState([]);
+  const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [showCalc, setShowCalc] = useState(false);
@@ -91,9 +93,11 @@ export default function LoansPage() {
           <button onClick={() => setShowCalc(true)} className="neo-btn-outline flex items-center gap-2">
             <HiOutlineCalculator className="w-5 h-5" /> EMI Calculator
           </button>
-          <button onClick={() => setShowForm(true)} className="neo-btn-primary flex items-center gap-2">
-            <HiOutlinePlus className="w-5 h-5" /> Apply Loan
-          </button>
+          {user?.role !== 'Manager' && (
+            <button onClick={() => setShowForm(true)} className="neo-btn-primary flex items-center gap-2">
+              <HiOutlinePlus className="w-5 h-5" /> Apply Loan
+            </button>
+          )}
         </div>
       </div>
 
@@ -131,7 +135,7 @@ export default function LoansPage() {
                     <td>{l.interestRate}%</td>
                     <td>{getStatusBadge(l.status)}</td>
                     <td>
-                      {l.status === 'Pending' && (
+                      {l.status === 'Pending' && user?.role === 'Manager' && (
                         <div className="flex gap-1">
                           <button onClick={() => handleStatusUpdate(l.loanId, 'Approved')}
                             className="text-xs px-2 py-1 rounded-lg bg-mint-50 text-mint-600 hover:bg-mint-100">
