@@ -97,7 +97,7 @@ router.post('/deposit', protect, async (req, res) => {
 // POST /api/transactions/withdraw
 router.post('/withdraw', protect, async (req, res) => {
   try {
-    const { accountId, amount, mode, description } = req.body;
+    const { accountId, amount, mode, description, chequeNumber, chequeBank, chequeBranch, chequeDate } = req.body;
 
     const account = await Account.findOne({ accountId, status: 'Active' });
     if (!account) {
@@ -129,6 +129,11 @@ router.post('/withdraw', protect, async (req, res) => {
       mode: mode || 'Cash',
       amount: mongoose.Types.Decimal128.fromString(amount.toString()),
       description,
+      chequeNumber,
+      chequeBank,
+      chequeBranch,
+      chequeDate: chequeDate ? new Date(chequeDate) : undefined,
+      chequeStatus: mode === 'Cheque' ? 'Received' : 'N/A',
       status,
       branchCode: req.user.branchCode,
       performedBy: req.user.userId

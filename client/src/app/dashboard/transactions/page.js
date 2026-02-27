@@ -3,7 +3,8 @@ import { useEffect, useState } from 'react';
 import { getTransactions, deposit, withdraw, transfer, getAccount, updateTransactionStatus } from '@/lib/api';
 import toast from 'react-hot-toast';
 import { useAuth } from '@/context/AuthContext';
-import { HiOutlineX } from 'react-icons/hi';
+import { HiOutlineX, HiOutlineDocumentSearch } from 'react-icons/hi';
+import ChequeScanner from '@/components/ChequeScanner';
 
 export default function TransactionsPage() {
   const [transactions, setTransactions] = useState([]);
@@ -16,6 +17,7 @@ export default function TransactionsPage() {
   });
   const [saving, setSaving] = useState(false);
   const [accountInfo, setAccountInfo] = useState(null);
+  const [showChequeScanner, setShowChequeScanner] = useState(false);
   const [filterAccountId, setFilterAccountId] = useState('');
 
   // Denomination State
@@ -88,7 +90,11 @@ export default function TransactionsPage() {
         accountId: form.accountId,
         amount: Number(form.amount),
         mode: form.mode,
-        description: form.description
+        description: form.description,
+        chequeNumber: form.chequeNumber,
+        chequeBank: form.chequeBank,
+        chequeBranch: form.chequeBranch,
+        chequeDate: form.chequeDate
       });
       toast.success(`Withdrawal successful! New Balance: ₹${Number(res.data.newBalance).toLocaleString('en-IN')}`);
       resetForm();
@@ -138,7 +144,22 @@ export default function TransactionsPage() {
     });
     setDenominations({ 2000: 0, 500: 0, 200: 0, 100: 0, 50: 0, 20: 0, 10: 0, 5: 0, 1: 0 });
     setAccountInfo(null);
+    setShowChequeScanner(false);
     setTab('list');
+  };
+
+  // Handle cheque data from scanner
+  const handleChequeExtracted = (data) => {
+    setForm(prev => ({
+      ...prev,
+      chequeNumber: data.chequeNumber || prev.chequeNumber,
+      chequeBank: data.chequeBank || prev.chequeBank,
+      chequeBranch: data.chequeBranch || prev.chequeBranch,
+      chequeDate: data.chequeDate || prev.chequeDate,
+      amount: data.amount || prev.amount,
+    }));
+    setShowChequeScanner(false);
+    toast.success('Cheque details auto-filled successfully!');
   };
 
   const getStatusBadge = (status) => {
@@ -252,27 +273,39 @@ export default function TransactionsPage() {
                 </div>
               )}
 
-              {form.mode === 'Cheque' && tab === 'deposit' && (
-                <div className="md:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-4 bg-yellow-50 p-4 rounded-xl border border-yellow-200">
-                  <div>
-                    <label className="neo-label">Cheque Number *</label>
-                    <input className="neo-input" placeholder="Enter cheque number" value={form.chequeNumber}
-                      onChange={(e) => setForm({ ...form, chequeNumber: e.target.value })} />
-                  </div>
-                  <div>
-                    <label className="neo-label">Bank Name *</label>
-                    <input className="neo-input" placeholder="Issuing Bank Name" value={form.chequeBank}
-                      onChange={(e) => setForm({ ...form, chequeBank: e.target.value })} />
-                  </div>
-                  <div>
-                    <label className="neo-label">Branch Name</label>
-                    <input className="neo-input" placeholder="Issuing Branch (Optional)" value={form.chequeBranch}
-                      onChange={(e) => setForm({ ...form, chequeBranch: e.target.value })} />
-                  </div>
-                  <div>
-                    <label className="neo-label">Cheque Date *</label>
-                    <input type="date" className="neo-input" value={form.chequeDate}
-                      onChange={(e) => setForm({ ...form, chequeDate: e.target.value })} />
+              {form.mode === 'Cheque' && (tab === 'deposit' || tab === 'withdraw') && (
+                <div className="md:col-span-2 space-y-3">
+                  {/* Scan Cheque Button */}
+                  <button
+                    type="button"
+                    onClick={() => setShowChequeScanner(true)}
+                    className="w-full flex items-center justify-center gap-2 py-3 bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-xl hover:from-amber-600 hover:to-orange-600 transition-all shadow-lg shadow-orange-200 font-medium text-sm"
+                  >
+                    <HiOutlineDocumentSearch className="w-5 h-5" />
+                    📷 Scan Cheque Image to Auto-Fill
+                  </button>
+                  <div className="text-center text-xs text-gray-400">— or fill manually below —</div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-yellow-50 p-4 rounded-xl border border-yellow-200">
+                    <div>
+                      <label className="neo-label">Cheque Number *</label>
+                      <input className="neo-input" placeholder="Enter cheque number" value={form.chequeNumber}
+                        onChange={(e) => setForm({ ...form, chequeNumber: e.target.value })} />
+                    </div>
+                    <div>
+                      <label className="neo-label">Bank Name *</label>
+                      <input className="neo-input" placeholder="Issuing Bank Name" value={form.chequeBank}
+                        onChange={(e) => setForm({ ...form, chequeBank: e.target.value })} />
+                    </div>
+                    <div>
+                      <label className="neo-label">Branch Name</label>
+                      <input className="neo-input" placeholder="Issuing Branch (Optional)" value={form.chequeBranch}
+                        onChange={(e) => setForm({ ...form, chequeBranch: e.target.value })} />
+                    </div>
+                    <div>
+                      <label className="neo-label">Cheque Date *</label>
+                      <input type="date" className="neo-input" value={form.chequeDate}
+                        onChange={(e) => setForm({ ...form, chequeDate: e.target.value })} />
+                    </div>
                   </div>
                 </div>
               )}
@@ -370,6 +403,14 @@ export default function TransactionsPage() {
           </table>
         </div>
       </div>
+
+      {/* Cheque Scanner Modal */}
+      {showChequeScanner && (
+        <ChequeScanner
+          onExtracted={handleChequeExtracted}
+          onClose={() => setShowChequeScanner(false)}
+        />
+      )}
     </div>
   );
 }
