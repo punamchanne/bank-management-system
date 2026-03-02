@@ -438,14 +438,18 @@ export default function ChequeScanner({ onExtracted, onClose }) {
 
         // ----- 6. AMOUNT (in figures) -----
         const amountPatterns = [
+            // Printed check amounts often use asterisks
+            /[\*#]+\s*([\d,]+)\s*[\*#]+/i,
             // Rs. 50,000/- or Rs 50000
             /Rs\.?\s*([\d,]+)\s*\/?-?/i,
-            // Inside amount box — just the number with comma, followed by /-
+            // Amount with "Rupees" or "₹" right before it
+            /(?:Rupees|₹)\s*([\d,]+)/i,
+            // Inside amount box — just the number, followed by /-
             /([\d]{1,3}(?:,\d{2,3})*)\s*\/?-/,
-            // After rupee symbol
-            /[₹]\s*([\d,]+)/,
-            // Any standalone large number (5+ digits when commas removed)
+            // Any standalone large number with commas
             /\b(\d{1,3}(?:,\d{2,3})+)\b/,
+            // Number at the end of a line, or by itself
+            /(?:^|\s)(\d{3,8})(?:\s*\/?-|$)/m
         ];
         for (const pat of amountPatterns) {
             const m = fullText.match(pat);
@@ -479,22 +483,33 @@ export default function ChequeScanner({ onExtracted, onClose }) {
 
         // ----- 7. PAYEE NAME -----
         const payeePatterns = [
-            // Extract from "Pay <NAME> or Bearer" line directly
-            /(?:Pay|Pey|Poy|P.y)\s*(?:to|t0)?\s*[:\-\|]?\s+([A-Z][A-Za-z.\s]{3,40}?)(?:\s{2,}|or\s+Bearer|Bearer|Rupees|₹|\n|$)/i,
+            // Look for Date followed by the name on the next line (very reliable position, single line only)
+            /(?:Date|date)\s*:?\s*[\d]{1,2}[\/\-\.][\d]{1,2}[\/\-\.][\d]{2,4}\s*\n+([A-Za-z \t.,&()'-]{3,60})/i,
+            // Extract from "Pay" up to "or Bearer/Order" - handling OCR misread of 'Pay' as 'ss' or '55'
+            /(?:Pay|Pey|Poy|Pa|P.y|ss|55|ay)\s*(?:to|t0)?\s*[:\-\|]?\s*([A-Za-z0-9 \t.,&()'-]{3,80}?)\s+(?:or\s+Bearer|Bearer|or\s+Order|Order)/i,
             // Fallback match looking backward from 'or bearer'
-            /([A-Z][A-Za-z.\s]{3,40}?)\s+or\s+(?:Bearer|bearer)/i,
-            // Last resort: word after Pay with at least two words
-            /Pay\s+([A-Za-z]+\s+[A-Za-z\s.]+)/i
+            /([A-Za-z0-9 \t.,&()'-]{3,80}?)\s+(?:or\s+Bearer|Bearer|or\s+Order|Order)/i,
+            // Extract from "Pay" until Rupees/₹/upees or newline
+            /(?:Pay|Pey|Poy|Pa|P.y|ss|55|ay)\s*(?:to|t0)?\s*[:\-\|]?\s*([A-Za-z0-9 \t.,&()'-]{3,80}?)(?:Rupees|upees|pees|₹|\n|$)/i,
+            // Strict word after Pay, handling spaces
+            /(?:Pay|Pey|Poy|Pa|P.y|ss|55|ay)[ \t]+([A-Za-z0-9]+(?:[ \t]+[A-Za-z0-9.,&()'-]+){1,5})/i,
+            // Extremely aggressive: look for anything that looks like a name near "Pay"
+            /(?:Pay|Pey|Poy|Pa|P.y|ss|55|ay)\s*:?[ \t]*([A-Za-z \t.,]{3,50})/i
         ];
         for (const pat of payeePatterns) {
             const m = fullText.match(pat);
             if (m && m[1]) {
                 let payee = m[1].trim();
+                // If it accidentally included 'Pay ', 'to ', remove it
+                payee = payee.replace(/^(?:pay|to|t0|pey|poy|pa|ss|55|-)\s+/ig, '');
+
                 // Remove trailing noise
-                payee = payee.replace(/\s*(or|bearer|Order|only|Pay|Rupees|\s+$)/gi, '').trim();
+                payee = payee.replace(/\s*(?:or|bearer|Order|only|Pay|Rupees|upees|₹|Rs\.?|\s+$)/gi, '').trim();
                 // Additional cleanup to remove double spaces
                 payee = payee.replace(/\s{2,}/g, ' ');
-                if (payee.length >= 3 && payee.length <= 50) {
+
+                // Check again after cleaning
+                if (payee.length >= 3 && payee.length <= 80 && !['rupees', 'upees', 'bearer', 'order', 'only'].includes(payee.toLowerCase())) {
                     data.payee = payee;
                     break;
                 }
