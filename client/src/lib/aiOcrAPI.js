@@ -10,13 +10,13 @@
 const getApiConfig = () => {
     return {
         GEMINI_API_KEY:
-            (typeof process !== 'undefined' && process.env?.NEXT_PUBLIC_GEMINI_API_KEY) ||
+            (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_GEMINI_API_KEY) ||
             (typeof window !== 'undefined' && localStorage.getItem('gemini_api_key')) || '',
         OPENAI_API_KEY:
-            (typeof process !== 'undefined' && process.env?.NEXT_PUBLIC_OPENAI_API_KEY) ||
+            (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_OPENAI_API_KEY) ||
             (typeof window !== 'undefined' && localStorage.getItem('openai_api_key')) || '',
         GOOGLE_CLOUD_API_KEY:
-            (typeof process !== 'undefined' && process.env?.NEXT_PUBLIC_GOOGLE_CLOUD_API_KEY) ||
+            (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_GOOGLE_CLOUD_API_KEY) ||
             (typeof window !== 'undefined' && localStorage.getItem('google_cloud_api_key')) || '',
     };
 };
