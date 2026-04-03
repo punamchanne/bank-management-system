@@ -1,6 +1,7 @@
 'use client';
 import { useState, useRef, useCallback } from 'react';
-import { HiOutlineUpload, HiOutlineCamera, HiOutlineDocumentSearch, HiOutlineCheckCircle, HiOutlineX, HiOutlineRefresh, HiOutlineSparkles } from 'react-icons/hi';
+import { HiOutlineUpload, HiOutlineCamera, HiOutlineDocumentSearch, HiOutlineCheckCircle, HiOutlineX, HiOutlineRefresh, HiOutlineSparkles, HiOutlineCog } from 'react-icons/hi';
+import { extractChequeDataWithAI, getAvailableAPIs } from '../lib/aiOcrAPI';
 
 // Demo cheque data for testing
 const DEMO_CHEQUE_DATA = {
@@ -25,6 +26,20 @@ export default function ChequeScanner({ onExtracted, onClose }) {
     const [showRawText, setShowRawText] = useState(false);
     const [error, setError] = useState(null);
     const [dragActive, setDragActive] = useState(false);
+
+    // Internal AI OCR state (no UI configuration)
+    const [aiProcessing, setAiProcessing] = useState(false);
+
+    // Auto-detect available AI APIs from environment
+    const hasAIAvailable = () => {
+        const apis = getAvailableAPIs();
+        console.log('Checking AI availability:', apis);
+        return apis.gemini || apis.openai || apis.googleCloud;
+    };
+
+
+
+
     const fileInputRef = useRef(null);
     const canvasRef = useRef(null);
     const processCanvasRef = useRef(null);
@@ -211,7 +226,117 @@ export default function ChequeScanner({ onExtracted, onClose }) {
         return canvas.toDataURL('image/png');
     }, []);
 
-    // Pre-process image for better OCR — increase contrast & convert to grayscale
+    // AI OCR scanning (internal - no UI configuration)
+    const scanChequeWithAI = async (imgSrc) => {
+        setScanning(true);
+        setAiProcessing(true);
+        setScanProgress(0);
+        setScanStatus('🤖 AI OCR - Initializing...');
+        setError(null);
+        setRawOcrText('Initializing AI OCR...\n');
+
+        try {
+            // Log available APIs for debugging
+            const availableAPIs = getAvailableAPIs();
+            console.log('Available AI APIs:', availableAPIs);
+
+            // Show API status in raw text area for debugging
+            let debugLog = '=== AI OCR Debug Log ===\n\n';
+            debugLog += `APIs Available:\n`;
+            debugLog += `  - Gemini: ${availableAPIs.gemini ? '✅ Yes' : '❌ No'}\n`;
+            debugLog += `  - Google Cloud: ${availableAPIs.googleCloud ? '✅ Yes' : '❌ No'}\n`;
+            debugLog += `  - OpenAI: ${availableAPIs.openai ? '✅ Yes' : '❌ No'}\n\n`;
+            setRawOcrText(debugLog);
+
+            if (!availableAPIs.gemini && !availableAPIs.googleCloud && !availableAPIs.openai) {
+                throw new Error('No AI API keys found! Check .env.local file');
+            }
+
+            // Step 1: Analyze image
+            setScanProgress(10);
+            setScanStatus('🤖 Preparing image for AI analysis...');
+
+            // Step 2: Auto-select best available API
+            let selectedAPI = 'gemini';
+            if (availableAPIs.gemini) {
+                selectedAPI = 'gemini';
+            } else if (availableAPIs.googleCloud) {
+                selectedAPI = 'google-cloud';
+            } else if (availableAPIs.openai) {
+                selectedAPI = 'openai';
+            }
+
+            debugLog += `Selected API: ${selectedAPI.toUpperCase()}\n`;
+            debugLog += `Processing...\n\n`;
+            setRawOcrText(debugLog);
+
+            setScanStatus(`🤖 Sending image to ${selectedAPI.toUpperCase()} for analysis...`);
+            setScanProgress(30);
+
+            // Step 3: Process with AI OCR
+            const result = await extractChequeDataWithAI(imgSrc, {
+                primaryAPI: selectedAPI,
+                enableFallback: true
+            });
+
+            console.log('AI OCR Result:', result);
+            setScanProgress(80);
+
+            if (result.success) {
+                // Convert AI result format to our component format
+                const extractedFields = {
+                    chequeNumber: result.data.chequeNumber || '',
+                    chequeBank: result.data.bankName || '',
+                    chequeBranch: result.data.branchName || '',
+                    chequeDate: result.data.date || '',
+                    amount: result.data.amount || '',
+                    payee: result.data.payeeName || '',
+                    accountNumber: result.data.accountNumber || '',
+                    ifsc: result.data.ifscCode || ''
+                };
+
+                console.log('Extracted fields:', extractedFields);
+
+                debugLog += `✅ SUCCESS - Used: ${result.api}\n`;
+                debugLog += `Fields extracted: ${result.fieldCount}/8\n\n`;
+                debugLog += `--- Extracted Data ---\n`;
+                debugLog += JSON.stringify(result.data, null, 2);
+                setRawOcrText(debugLog);
+
+                setScanStatus(`✅ AI extraction complete! Used ${result.api}, extracted ${result.fieldCount}/8 fields`);
+                setExtractedData(extractedFields);
+                setScanProgress(100);
+                setScanning(false);
+
+            } else {
+                // Fallback to Enhanced Tesseract if AI fails
+                console.error('AI OCR failed:', result.error);
+                debugLog += `❌ AI OCR FAILED: ${result.error}\n`;
+                debugLog += `Falling back to Tesseract OCR...\n`;
+                setRawOcrText(debugLog);
+
+                setScanStatus(`⚠️ AI failed: ${result.error}. Using Tesseract...`);
+                setScanProgress(85);
+                setAiProcessing(false);
+                await scanChequeWithTesseract(imgSrc);
+            }
+
+        } catch (error) {
+            console.error('AI OCR Error:', error);
+            setRawOcrText(`❌ ERROR: ${error.message}\n\nFalling back to Tesseract OCR...`);
+            setScanStatus(`⚠️ Error: ${error.message}. Using Tesseract...`);
+            setScanProgress(85);
+            setAiProcessing(false);
+
+            // Fallback to Tesseract
+            await scanChequeWithTesseract(imgSrc);
+        } finally {
+            setAiProcessing(false);
+        }
+    };
+
+
+
     const preprocessImage = useCallback((imageSrc) => {
         return new Promise((resolve) => {
             const canvas = processCanvasRef.current;
@@ -220,8 +345,8 @@ export default function ChequeScanner({ onExtracted, onClose }) {
             const img = new Image();
             img.crossOrigin = 'anonymous';
             img.onload = () => {
-                // Scale up small images
-                const scale = Math.max(1, 1500 / img.width);
+                // Higher resolution for handwritten text (min 2000px width)
+                const scale = Math.max(1, 2000 / img.width);
                 canvas.width = img.width * scale;
                 canvas.height = img.height * scale;
                 const ctx = canvas.getContext('2d');
@@ -233,25 +358,62 @@ export default function ChequeScanner({ onExtracted, onClose }) {
                 const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
                 const data = imageData.data;
 
-                // Convert to high-contrast grayscale
+                // Advanced preprocessing for handwritten text
                 for (let i = 0; i < data.length; i += 4) {
-                    // Luminance grayscale
+                    // Enhanced luminance calculation
                     let gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
 
-                    // Increase contrast
-                    gray = ((gray / 255 - 0.5) * 1.8 + 0.5) * 255;
+                    // Adaptive contrast enhancement for handwritten text
+                    // More aggressive enhancement for better pen stroke detection
+                    gray = ((gray / 255 - 0.5) * 2.2 + 0.5) * 255;
                     gray = Math.max(0, Math.min(255, gray));
 
-                    // Mild thresholding — push light grays to white, dark grays to black
-                    if (gray > 180) gray = 255;
-                    else if (gray < 80) gray = 0;
+                    // Adaptive thresholding for handwritten text
+                    // Lower threshold to capture lighter pen strokes
+                    if (gray > 160) gray = 255;       // More sensitive to light backgrounds
+                    else if (gray < 95) gray = 0;     // Better capture of light handwriting
+                    else {
+                        // Intermediate values - enhance based on local context
+                        gray = gray < 128 ? 0 : 255;
+                    }
 
                     data[i] = gray;
                     data[i + 1] = gray;
                     data[i + 2] = gray;
                 }
 
-                ctx.putImageData(imageData, 0, 0);
+                // Apply noise reduction using simple median filter
+                const processedData = new Uint8ClampedArray(data);
+                const width = canvas.width;
+                const height = canvas.height;
+
+                for (let y = 1; y < height - 1; y++) {
+                    for (let x = 1; x < width - 1; x++) {
+                        const idx = (y * width + x) * 4;
+
+                        // Get 3x3 neighborhood values
+                        const neighbors = [];
+                        for (let dy = -1; dy <= 1; dy++) {
+                            for (let dx = -1; dx <= 1; dx++) {
+                                const nIdx = ((y + dy) * width + (x + dx)) * 4;
+                                neighbors.push(data[nIdx]);
+                            }
+                        }
+
+                        // Apply median filter for noise reduction
+                        neighbors.sort((a, b) => a - b);
+                        const median = neighbors[4]; // middle value of 9 elements
+
+                        processedData[idx] = median;
+                        processedData[idx + 1] = median;
+                        processedData[idx + 2] = median;
+                    }
+                }
+
+                // Apply the processed data
+                const finalImageData = new ImageData(processedData, width, height);
+                ctx.putImageData(finalImageData, 0, 0);
+
                 resolve(canvas.toDataURL('image/png'));
             };
             img.onerror = () => resolve(imageSrc);
@@ -318,43 +480,89 @@ export default function ChequeScanner({ onExtracted, onClose }) {
             ifsc: ''
         };
 
-        // ----- 1. CHEQUE NUMBER -----
-        // Look for "No." or "No" followed by digits
+        // ----- 1. CHEQUE NUMBER (Enhanced for handwritten variations) -----
         let chequeNum = null;
-        // Pattern: "No. 456789" or "No 456789" or "No.456789"
-        const noPatterns = [
+
+        // Enhanced patterns for handwritten cheque numbers
+        const chequeNumberPatterns = [
+            // Standard "No." patterns with variations
             /No\.?\s*(\d{5,8})/i,
             /Cheque\s*(?:No\.?|Number|#)\s*:?\s*(\d{5,8})/i,
+
+            // Handwritten variations (OCR often misreads)
+            /N0\.?\s*(\d{5,8})/i, // 0 instead of o
+            /Mo\.?\s*(\d{5,8})/i, // M instead of N
+            /N[oO]\.?\s*(\d{5,8})/i, // o/O variations
+
+            // Top-right corner number patterns (common placement)
+            /(\d{6,8})\s*$/m, // End of line
+            /^.*?(\d{6,8})\s*$/m, // Any line ending with 6-8 digits
+
+            // CBS or other prefixes (seen in Bank of Baroda)
+            /CBS\s*(\d{6,8})/i,
+            /(?:CBS|SBS|DBS)\s*[:\-]?\s*(\d{6,8})/i,
         ];
-        for (const pat of noPatterns) {
+
+        for (const pat of chequeNumberPatterns) {
             const m = fullText.match(pat);
             if (m) { chequeNum = m[1]; break; }
         }
 
-        // If not found, look in the MICR band (bottom area) — first 6-digit number
+        // Enhanced MICR band detection
         if (!chequeNum) {
-            // The MICR band typically has the cheque number as the first group of digits
-            const micrLine = lines.slice(-3).join(' '); // last 3 lines
-            const micrMatch = micrLine.match(/(\d{6})/);
-            if (micrMatch) chequeNum = micrMatch[1];
+            const micrLines = lines.slice(-4); // Check last 4 lines
+            for (const line of micrLines) {
+                // MICR typically has cheque number as first group of 6+ digits
+                const micrMatch = line.match(/(\d{6,8})/);
+                if (micrMatch) {
+                    chequeNum = micrMatch[1];
+                    break;
+                }
+            }
         }
+
+        // Look in top area for any 6-8 digit number (fallback)
+        if (!chequeNum) {
+            const topLines = lines.slice(0, 5); // First 5 lines
+            for (const line of topLines) {
+                const topMatch = line.match(/(\d{6,8})/);
+                if (topMatch) {
+                    chequeNum = topMatch[1];
+                    break;
+                }
+            }
+        }
+
         if (chequeNum) data.chequeNumber = chequeNum;
 
-        // ----- 2. BANK NAME -----
+        // ----- 2. BANK NAME (Enhanced with more banks and OCR variations) -----
         const bankNames = [
+            // Major Indian Banks
             'STATE BANK OF INDIA', 'HDFC BANK', 'ICICI BANK', 'AXIS BANK',
             'PUNJAB NATIONAL BANK', 'BANK OF BARODA', 'CANARA BANK', 'UNION BANK OF INDIA',
             'INDIAN OVERSEAS BANK', 'BANK OF INDIA', 'KOTAK MAHINDRA BANK', 'YES BANK',
             'INDUSIND BANK', 'FEDERAL BANK', 'IDBI BANK', 'UCO BANK', 'CENTRAL BANK OF INDIA',
             'INDIAN BANK', 'BANK OF MAHARASHTRA', 'KARNATAKA BANK', 'SOUTH INDIAN BANK',
+            'CORPORATION BANK', 'SYNDICATE BANK', 'ORIENTAL BANK OF COMMERCE',
+            'ALLAHABAD BANK', 'ANDHRA BANK', 'VIJAYA BANK', 'DENA BANK',
+
+            // International Banks (for sample cheques)
+            'CHASE BANK', 'WELLS FARGO', 'BANK OF AMERICA', 'CITIBANK',
+            'HSBC', 'STANDARD CHARTERED', 'DEUTSCHE BANK',
+
+            // OCR Variations for common banks
+            'STATS BANK OF INDIA', 'STATE BAMK OF INDIA', 'STATR BANK OF INDIA',
+            'HDFC BAMK', 'HDPC BANK', 'HDFG BANK',
+            'ICIGI BANK', 'IGICI BANK', 'ICIGI BAMK',
+            'BAMK OF BARODA', 'BANK OP BARODA', 'BANK OF BABODA'
         ];
 
+        // Try exact and partial matches
         for (const bank of bankNames) {
-            // Allow OCR artifacts — match with some tolerance
             const bankWords = bank.split(' ');
             const bankRegex = new RegExp(bankWords.join('\\s+'), 'i');
             if (bankRegex.test(upperText)) {
-                // Title case
+                // Normalize to proper case
                 data.chequeBank = bank.split(' ').map(w =>
                     w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()
                 ).join(' ');
@@ -362,43 +570,132 @@ export default function ChequeScanner({ onExtracted, onClose }) {
             }
         }
 
-        // Fallback: try partial match
+        // Enhanced fallback with more flexible patterns
         if (!data.chequeBank) {
-            if (/STATE\s*BANK/i.test(upperText)) data.chequeBank = 'State Bank Of India';
-            else if (/HDFC/i.test(upperText)) data.chequeBank = 'HDFC Bank';
-            else if (/ICICI/i.test(upperText)) data.chequeBank = 'ICICI Bank';
-            else if (/AXIS/i.test(upperText)) data.chequeBank = 'Axis Bank';
-            else if (/PUNJAB\s*NATIONAL/i.test(upperText)) data.chequeBank = 'Punjab National Bank';
-            else if (/KOTAK/i.test(upperText)) data.chequeBank = 'Kotak Mahindra Bank';
+            const bankPatterns = [
+                // State Bank variations
+                { pattern: /STATE\s*BANK/i, name: 'State Bank Of India' },
+                { pattern: /SBI|S\.B\.I/i, name: 'State Bank Of India' },
+
+                // HDFC variations
+                { pattern: /HDFC/i, name: 'HDFC Bank' },
+
+                // ICICI variations
+                { pattern: /ICICI/i, name: 'ICICI Bank' },
+
+                // Axis variations
+                { pattern: /AXIS/i, name: 'Axis Bank' },
+
+                // PNB variations
+                { pattern: /PUNJAB\s*NATIONAL|PNB/i, name: 'Punjab National Bank' },
+
+                // Bank of Baroda variations (Enhanced with IFSC-based detection)
+                { pattern: /BARODA|BOB|BARB0/i, name: 'Bank Of Baroda' },
+
+                // Kotak variations
+                { pattern: /KOTAK/i, name: 'Kotak Mahindra Bank' },
+
+                // Canara variations
+                { pattern: /CANARA/i, name: 'Canara Bank' },
+
+                // Generic "BANK" with preceding word
+                { pattern: /(\w+)\s+BANK/i, name: null }, // Will use matched word + Bank
+                // Match "SUM BANK"
+                { pattern: /SUM\s*BANK/i, name: 'Sum Bank' }
+            ];
+
+            for (const { pattern, name } of bankPatterns) {
+                const match = upperText.match(pattern);
+                if (match) {
+                    if (name) {
+                        data.chequeBank = name;
+                    } else if (match[1]) {
+                        // Use matched word + Bank
+                        data.chequeBank = match[1].charAt(0).toUpperCase() + match[1].slice(1).toLowerCase() + ' Bank';
+                    }
+                    break;
+                }
+            }
         }
 
-        // ----- 3. IFSC CODE -----
-        // IFSC is always 4 letters followed by 0 and 6 digits (total 11 chars)
+        // ----- 3. IFSC CODE (Enhanced for OCR variations) -----
         const ifscPatterns = [
+            // Standard IFSC patterns
+            /IFSC\s*CODE\s*:?\s*([A-Z]{4}[0O][A-Z0-9]{6})/i,  // Enhanced for patterns like BARB0GANNAS
             /IFSC\s*:?\s*([A-Z]{4}[0O]\d{6})/i,
-            /([A-Z]{4}0\d{6})/,
-            // OCR might read 0 as O
-            /([A-Z]{4}[0O]\d{6})/i,
+            /IFSC\s*CODE\s*:?\s*([A-Z]{4}[0O]\d{6})/i,
+
+            // OCR variations of "IFSC"
+            /(?:IFSC|IPSC|IFSG|IFDC|IRSC)\s*:?\s*([A-Z]{4}[0O]\d{6})/i,
+
+            // Direct IFSC pattern (4 letters + 0 + 6 digits/letters)
+            /([A-Z]{4}0[A-Z0-9]{6})/i,  // More flexible for mixed patterns
+            /([A-Z]{4}[0O]\d{6})/i, // OCR might read 0 as O
+
+            // IFSC with spaces or dashes
+            /([A-Z]{4}[0O]\s*\d{6})/i,
+            /([A-Z]{4}[0O]\d{2}\s*\d{4})/i,
+
+            // Bank code specific patterns (enhanced)
+            /SBIN[0O]\d{6}/i, // State Bank
+            /HDFC[0O]\d{6}/i, // HDFC
+            /ICIC[0O]\d{6}/i, // ICICI
+            /BARB0[A-Z0-9]{6}/i, // Bank of Baroda (can have letters)
+            /UTIB[0O]\d{6}/i, // Axis Bank
+            /PUNB[0O]\d{6}/i, // Punjab National Bank
+
+            // With surrounding text
+            /(?:IFSC|CODE|IPSC)\s*[:\-]?\s*([A-Z]{4}[0O][A-Z0-9]{6})/i,
+
+            // Standalone pattern in lines
+            /^.*?([A-Z]{4}[0O][A-Z0-9]{6}).*?$/im,
+            
+            // Highly messy OCR capturing spaces
+            /IFSC\s*[:\-]?\s*([A-Z0-9\s]{10,25})/i
         ];
+
         for (const pat of ifscPatterns) {
             const m = fullText.match(pat);
             if (m) {
-                data.ifsc = m[1].toUpperCase().replace(/O(?=\d{6}$)/, '0');
+                // Clean up the IFSC code
+                let ifsc = m[1].toUpperCase().replace(/[^A-Z0-9]/g, '');
+                // Replace O with 0 in 5th position
+                if (ifsc.length === 11 && /[A-Z]{4}[O]\d{6}/.test(ifsc)) {
+                    ifsc = ifsc.substring(0, 4) + '0' + ifsc.substring(5);
+                }
+                data.ifsc = ifsc;
                 break;
             }
         }
 
-        // Also check MICR band for IFSC-like pattern
+        // Enhanced MICR band search for IFSC
         if (!data.ifsc) {
-            const micrText = lines.slice(-3).join(' ');
-            const micrIfsc = micrText.match(/([A-Z]{4}0\d{6})/i);
-            if (micrIfsc) data.ifsc = micrIfsc[1].toUpperCase();
+            const micrText = lines.slice(-4).join(' '); // Check last 4 lines
+            const micrIfscPatterns = [
+                /([A-Z]{4}0\d{6})/i,
+                /([A-Z]{4}[0O]\d{6})/i
+            ];
+
+            for (const pat of micrIfscPatterns) {
+                const match = micrText.match(pat);
+                if (match) {
+                    let ifsc = match[1].toUpperCase();
+                    // Fix O -> 0 in 5th position
+                    if (ifsc.length === 11 && ifsc[4] === 'O') {
+                        ifsc = ifsc.substring(0, 4) + '0' + ifsc.substring(5);
+                    }
+                    data.ifsc = ifsc;
+                    break;
+                }
+            }
         }
 
         // ----- 4. BRANCH -----
         const branchPatterns = [
             /Branch\s*:?\s*([A-Za-z][A-Za-z\s,.-]+?)(?:\s{2,}|IFSC|$|\n)/im,
             /Branch\s*:?\s*(.+?)(?:\n|IFSC)/im,
+            // Fallback for address lines
+            /([A-Za-z][A-Za-z\s]+\s*(?:Road|Town|Street|Nagar|Colony|Marg|City)[A-Za-z\s,.-]*)/i
         ];
         for (const pat of branchPatterns) {
             const m = fullText.match(pat);
@@ -406,21 +703,43 @@ export default function ChequeScanner({ onExtracted, onClose }) {
                 let branch = m[1].trim();
                 // Clean up trailing punctuation
                 branch = branch.replace(/[,.\s]+$/, '');
-                if (branch.length > 2 && branch.length < 80) {
+                if (branch.length > 4 && branch.length < 80) {
                     data.chequeBranch = branch;
                     break;
                 }
             }
         }
 
-        // ----- 5. DATE -----
+        // ----- 5. DATE (Enhanced for handwritten variations) -----
         const datePatterns = [
-            // DD / MM / YYYY with various separators
+            // Enhanced date patterns for handwritten text
+
+            // Pattern 1: Traditional DD/MM/YYYY with various separators
             /Date\s*:?\s*(\d{1,2})\s*[\/\-.\s]\s*(\d{1,2})\s*[\/\-.\s]\s*(\d{4})/i,
-            // Without "Date:" prefix — any DD/MM/YYYY pattern
-            /(\d{1,2})\s*[\/\-.]\s*(\d{1,2})\s*[\/\-.]\s*(\d{4})/,
-            // DD MM YYYY with spaces
+
+            // Pattern 2: Standalone date patterns (common in handwritten)
+            /(\d{1,2})\s*[\/\-.\\]\s*(\d{1,2})\s*[\/\-.\\]\s*(\d{4})/,
+
+            // Pattern 3: DD MM YYYY with spaces (handwritten style)
             /(\d{1,2})\s+(\d{1,2})\s+(\d{4})/,
+
+            // Pattern 4: Date circled or in box (common handwriting)
+            /(?:\(|\[|círculo)?\s*(\d{1,2})\s*[\/\-.\s]\s*(\d{1,2})\s*[\/\-.\s]\s*(\d{2,4})\s*(?:\)|\])?/,
+
+            // Pattern 5: Date with written month names (sometimes OCR confuses them)
+            /(\d{1,2})\s*(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s*(\d{2,4})/i,
+
+            // Pattern 6: Two digit patterns (DD/MM/YY format)
+            /(\d{1,2})\s*[\/\-.\s]\s*(\d{1,2})\s*[\/\-.\s]\s*(\d{2})\b/,
+
+            // Pattern 7: Very flexible - any 3 numbers that look like a date
+            /\b(\d{1,2})[^\w\d](\d{1,2})[^\w\d](\d{2,4})\b/,
+
+            // Pattern 8: Look for date in specific money order format patterns
+            /(\d{2})\s*(\d{2})\s*(\d{2,4})/,
+            
+            // Pattern 9: Highly distorted OCR like & pate 28/7 02 / 2013
+            /(?:Date|Pate|Oate|Dane|Bate|pate).*?(\d{1,2})\s*[\/\-.\\]+(?:\s*\d{1,2}\s*)?\s*(\d{1,2})\s*[\/\-.\\]+\s*(\d{4})/i
         ];
         for (const pat of datePatterns) {
             const m = fullText.match(pat);
@@ -428,6 +747,21 @@ export default function ChequeScanner({ onExtracted, onClose }) {
                 let [, day, month, year] = m;
                 day = day.padStart(2, '0');
                 month = month.padStart(2, '0');
+
+                // Handle 2-digit years by converting to 4-digit
+                if (year && year.length === 2) {
+                    const currentYear = new Date().getFullYear();
+                    const currentCentury = Math.floor(currentYear / 100) * 100;
+                    const yearNum = parseInt(year);
+
+                    // If year is in the future (relative to current 2-digit), use previous century
+                    if (yearNum > (currentYear % 100) + 10) {
+                        year = (currentCentury - 100 + yearNum).toString();
+                    } else {
+                        year = (currentCentury + yearNum).toString();
+                    }
+                }
+
                 // Sanity check
                 if (parseInt(month) <= 12 && parseInt(day) <= 31 && year.length === 4) {
                     data.chequeDate = `${year}-${month}-${day}`;
@@ -436,97 +770,206 @@ export default function ChequeScanner({ onExtracted, onClose }) {
             }
         }
 
-        // ----- 6. AMOUNT (in figures) -----
+        // ----- 6. AMOUNT (Enhanced to avoid account numbers) -----
         const amountPatterns = [
-            // Printed check amounts often use asterisks
+            // Enhanced patterns for handwritten amounts - prioritize patterns that don't capture account numbers
+
+            // Pattern 1: Amounts with asterisks or in amount box (printed checks)
             /[\*#]+\s*([\d,]+)\s*[\*#]+/i,
-            // Rs. 50,000/- or Rs 50000
-            /Rs\.?\s*([\d,]+)\s*\/?-?/i,
-            // Amount with "Rupees" or "₹" right before it
-            /(?:Rupees|₹)\s*([\d,]+)/i,
-            // Inside amount box — just the number, followed by /-
-            /([\d]{1,3}(?:,\d{2,3})*)\s*\/?-/,
-            // Any standalone large number with commas
-            /\b(\d{1,3}(?:,\d{2,3})+)\b/,
-            // Number at the end of a line, or by itself
-            /(?:^|\s)(\d{3,8})(?:\s*\/?-|$)/m
+
+            // Pattern 2: Rs. variations with reasonable limits (handles OCR errors with Rs)
+            /(?:Rs|RE|RS|Re|Bs|Rs\.|RE\.|RS\.|Re\.)\s*([\d,]{3,7})\s*\/?-?/i,
+
+            // Pattern 3: Rupee symbol variations with reasonable limits
+            /(?:Rupees|₹|Rupee|tupees|upees|Bupees)\s*([\d,]{3,7})/i,
+
+            // Pattern 4: Amount in box format (handwritten) - avoid long numbers
+            /(?:^|\s)([\d,]{3,7})\s*\/?-\s*(?:$|\s)/m,
+
+            // Pattern 5: Standalone numbers with commas but reasonable length (indian formatting)
+            /\b(\d{1,3}(?:,\d{2,3}){1,3})\b/,
+
+            // Pattern 6: Numbers at end of line with dash - avoid account numbers
+            /(\d{3,7})\s*\/?-?\s*$/m,
+
+            // Pattern 7: Moderate numbers that could be amounts (avoid 12+ digit account numbers)
+            /\b(\d{3,9})\b(?!\d)/,
+
+            // Pattern 8: Handwritten amount with slashes or dashes - reasonable length
+            /(\d{1,3}(?:,\d{2,3}){0,3})\s*[\/\-]/,
+
+            // Pattern 9: Amount between spaces (common in handwriting) - reasonable length
+            /\s+(\d{3,8}(?:,\d{2,3})*)\s+/
         ];
+
         for (const pat of amountPatterns) {
             const m = fullText.match(pat);
             if (m) {
                 const cleaned = m[1].replace(/,/g, '');
-                // Only accept if it's a reasonable cheque amount (>= 100)
-                if (parseInt(cleaned) >= 100) {
+                const amount = parseInt(cleaned);
+                // Only accept if it's a reasonable cheque amount (>= 100 and <= 50 crores)
+                // Avoid account numbers which are typically 10+ digits
+                if (amount >= 100 && amount <= 500000000 && cleaned.length <= 9) {
                     data.amount = cleaned;
                     break;
                 }
             }
         }
 
-        // Fallback: try to parse amount from words
+        // Enhanced amount words parsing for handwritten text
         if (!data.amount) {
             const amountWords = {
-                'ONE THOUSAND': '1000', 'TWO THOUSAND': '2000', 'FIVE THOUSAND': '5000',
-                'TEN THOUSAND': '10000', 'FIFTEEN THOUSAND': '15000', 'TWENTY THOUSAND': '20000',
-                'TWENTY FIVE THOUSAND': '25000', 'THIRTY THOUSAND': '30000',
-                'FORTY THOUSAND': '40000', 'FIFTY THOUSAND': '50000',
-                'SEVENTY FIVE THOUSAND': '75000', 'ONE LAKH': '100000', 'ONE HUNDRED THOUSAND': '100000',
-                'TWO LAKH': '200000', 'FIVE LAKH': '500000', 'TEN LAKH': '1000000',
+                // Standard number words
+                'ONE THOUSAND': '1000', 'TWO THOUSAND': '2000', 'THREE THOUSAND': '3000',
+                'FOUR THOUSAND': '4000', 'FIVE THOUSAND': '5000', 'SIX THOUSAND': '6000',
+                'SEVEN THOUSAND': '7000', 'EIGHT THOUSAND': '8000', 'NINE THOUSAND': '9000',
+                'TEN THOUSAND': '10000', 'ELEVEN THOUSAND': '11000', 'TWELVE THOUSAND': '12000',
+                'THIRTEEN THOUSAND': '13000', 'FOURTEEN THOUSAND': '14000', 'FIFTEEN THOUSAND': '15000',
+                'SIXTEEN THOUSAND': '16000', 'SEVENTEEN THOUSAND': '17000', 'EIGHTEEN THOUSAND': '18000',
+                'NINETEEN THOUSAND': '19000', 'TWENTY THOUSAND': '20000', 'TWENTY ONE THOUSAND': '21000',
+                'TWENTY TWO THOUSAND': '22000', 'TWENTY THREE THOUSAND': '23000', 'TWENTY FOUR THOUSAND': '24000',
+                'TWENTY FIVE THOUSAND': '25000', 'THIRTY THOUSAND': '30000', 'FORTY THOUSAND': '40000',
+                'FIFTY THOUSAND': '50000', 'SIXTY THOUSAND': '60000', 'SEVENTY THOUSAND': '70000',
+                'SEVENTY FIVE THOUSAND': '75000', 'EIGHTY THOUSAND': '80000', 'NINETY THOUSAND': '90000',
+                'ONE LAKH': '100000', 'ONE HUNDRED THOUSAND': '100000', 'TWO LAKH': '200000',
+                'THREE LAKH': '300000', 'FOUR LAKH': '400000', 'FIVE LAKH': '500000',
+                'TEN LAKH': '1000000', 'ONE CRORE': '10000000',
+
+                // Common handwriting OCR variations
+                'PIFTEEN THOUSAND': '15000', 'FIFTEBN THOUSAND': '15000', 'EIFTEEN THOUSAND': '15000',
+                'FIFTBEN THOUSAND': '15000', 'FIFTHEN THOUSAND': '15000', 'TIFTEEN THOUSAND': '15000',
+                'TWBNTY THOUSAND': '20000', 'TWEMTY THOUSAND': '20000', 'TWENTY THQUSAND': '20000',
+                'THIRIY THOUSAND': '30000', 'THIRITY THOUSAND': '30000', 'THIRTY THQUSAND': '30000',
+                'POURTEEN THOUSAND': '14000', 'FOURTBEN THOUSAND': '14000',
+                'EIGHTBEN THOUSAND': '18000', 'BIGHTBEN THOUSAND': '18000',
+
+                // Shortened versions common in handwriting
+                'FIFTEEN': '15000', 'TWENTY': '20000', 'THIRTY': '30000', 'FORTY': '40000',
+                'FIFTY': '50000', 'SIXTY': '60000', 'SEVENTY': '70000', 'EIGHTY': '80000',
+                'NINETY': '90000', 'TIFTEEN': '15000',
+
+                // With "ONLY" suffix (common in Indian cheques)
+                'FIFTEEN THOUSAND ONLY': '15000', 'TWENTY THOUSAND ONLY': '20000',
+                'FIFTY THOUSAND ONLY': '50000', 'ONE LAKH ONLY': '100000', 'TIFTEEN THOUSAND ONLY': '15000',
+
+                // Spelled out numbers with OCR variations
+                'BIGHT AND 15': '815', 'EIGHT AND 15': '815', 'EIGHT AND 59': '859'
             };
+
+            // Try exact matches first
             for (const [word, val] of Object.entries(amountWords)) {
                 if (upperText.includes(word)) {
                     data.amount = val;
                     break;
                 }
             }
+
+            // If still no amount, try partial matches with more flexibility
+            if (!data.amount) {
+                // Look for "THOUSAND" with a number before it
+                const thousandMatch = upperText.match(/(\w+)\s+THOUSAND/);
+                if (thousandMatch) {
+                    const numWord = thousandMatch[1];
+                    const numberMap = {
+                        'ONE': 1000, 'TWO': 2000, 'THREE': 3000, 'FOUR': 4000, 'FIVE': 5000,
+                        'SIX': 6000, 'SEVEN': 7000, 'EIGHT': 8000, 'NINE': 9000, 'TEN': 10000,
+                        'ELEVEN': 11000, 'TWELVE': 12000, 'THIRTEEN': 13000, 'FOURTEEN': 14000,
+                        'FIFTEEN': 15000, 'SIXTEEN': 16000, 'SEVENTEEN': 17000, 'EIGHTEEN': 18000,
+                        'NINETEEN': 19000, 'TWENTY': 20000, 'THIRTY': 30000, 'FORTY': 40000,
+                        'FIFTY': 50000, 'SIXTY': 60000, 'SEVENTY': 70000, 'EIGHTY': 80000,
+                        'NINETY': 90000,
+                        // Common OCR variations
+                        'PIFTEEN': 15000, 'FIFTEBN': 15000, 'EIFTEEN': 15000, 'FIFTHEN': 15000
+                    };
+                    if (numberMap[numWord]) {
+                        data.amount = numberMap[numWord].toString();
+                    }
+                }
+            }
         }
 
-        // ----- 7. PAYEE NAME -----
+        // ----- 7. PAYEE NAME (Enhanced for handwritten text and partial names) -----
         const payeePatterns = [
-            // Look for Date followed by the name on the next line (very reliable position, single line only)
-            /(?:Date|date)\s*:?\s*[\d]{1,2}[\/\-\.][\d]{1,2}[\/\-\.][\d]{2,4}\s*\n+([A-Za-z \t.,&()'-]{3,60})/i,
-            // Extract from "Pay" up to "or Bearer/Order" - handling OCR misread of 'Pay' as 'ss' or '55'
-            /(?:Pay|Pey|Poy|Pa|P.y|ss|55|ay)\s*(?:to|t0)?\s*[:\-\|]?\s*([A-Za-z0-9 \t.,&()'-]{3,80}?)\s+(?:or\s+Bearer|Bearer|or\s+Order|Order)/i,
-            // Fallback match looking backward from 'or bearer'
-            /([A-Za-z0-9 \t.,&()'-]{3,80}?)\s+(?:or\s+Bearer|Bearer|or\s+Order|Order)/i,
-            // Extract from "Pay" until Rupees/₹/upees or newline
-            /(?:Pay|Pey|Poy|Pa|P.y|ss|55|ay)\s*(?:to|t0)?\s*[:\-\|]?\s*([A-Za-z0-9 \t.,&()'-]{3,80}?)(?:Rupees|upees|pees|₹|\n|$)/i,
-            // Strict word after Pay, handling spaces
-            /(?:Pay|Pey|Poy|Pa|P.y|ss|55|ay)[ \t]+([A-Za-z0-9]+(?:[ \t]+[A-Za-z0-9.,&()'-]+){1,5})/i,
-            // Extremely aggressive: look for anything that looks like a name near "Pay"
-            /(?:Pay|Pey|Poy|Pa|P.y|ss|55|ay)\s*:?[ \t]*([A-Za-z \t.,]{3,50})/i
+            // Enhanced patterns for handwritten text recognition
+
+            // Pattern 1: After "Pay" variations (handles handwritten OCR errors)
+            /(?:Pay|Pey|Poy|Pa|P\.y|ss|55|ay|Fay|Pay|Pay_)\s*(?:to|t0|TO|To|T0)?\s*[:\-|/\\]?\s*([A-Za-z][A-Za-z0-9 \t.,&-]{2,70}?)(?:\s*or\s*Bearer|Bearer|or\s*Order|Order|Rupees|upees|pees|₹|\n|$)/i,
+
+            // Pattern 2: Between underlines (common in handwritten cheques)
+            /_{3,}([A-Za-z][A-Za-z0-9 \t.,&-]{2,70}?)_{3,}/i,
+
+            // Pattern 3: Capital letters indicating names - more flexible
+            /(?:Pay|Pey|Poy|Pa|P\.y|ss|55|ay)\s*(?:to|t0|TO)?\s*[:\-|]?\s*([A-Z][A-Z\s]{2,50})/i,
+
+            // Pattern 4: Look for name patterns after Pay field - more flexible
+            /(?:Pay|Pey|Poy|Pa|P\.y|ss|55|ay|Fay)\s*(?:to|t0|TO|To)?\s*[:\-|/\\]?\s*([A-Za-z]+(?:\s+[A-Za-z]+){0,5})/i,
+
+            // Pattern 5: Name near "or Bearer" (working backwards)
+            /([A-Za-z][A-Za-z0-9 \t.,&-]{2,60}?)\s+(?:or\s+Bearer|Bearer|or\s+Order|Order)/i,
+
+            // Pattern 6: Standalone name patterns (1-5 words) - include partial names
+            /\b([A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*){0,4})\b/,
+
+            // Pattern 7: Very flexible pattern for any reasonable name
+            /(?:Pay|Pey|Poy|Pa|P\.y)\s*[:\-]?\s*([A-Za-z \t.,&-]{3,50})/i,
+
+            // Pattern 8: Capture partial names that might be incomplete due to OCR errors
+            /\b([A-Z][A-Za-z]{2,15}(?:\s+[A-Z][A-Za-z]{2,15}){0,3})\b/,
+
+            // Pattern 9: Names that might have OCR errors but still recognizable
+            /([A-Z][A-Z\s]{4,30})/
         ];
+
         for (const pat of payeePatterns) {
             const m = fullText.match(pat);
             if (m && m[1]) {
                 let payee = m[1].trim();
+
                 // If it accidentally included 'Pay ', 'to ', remove it
                 payee = payee.replace(/^(?:pay|to|t0|pey|poy|pa|ss|55|-)\s+/ig, '');
 
                 // Remove trailing noise
                 payee = payee.replace(/\s*(?:or|bearer|Order|only|Pay|Rupees|upees|₹|Rs\.?|\s+$)/gi, '').trim();
+
                 // Additional cleanup to remove double spaces
                 payee = payee.replace(/\s{2,}/g, ' ');
 
-                // Check again after cleaning
-                if (payee.length >= 3 && payee.length <= 80 && !['rupees', 'upees', 'bearer', 'order', 'only'].includes(payee.toLowerCase())) {
+                // Check again after cleaning - more lenient for partial names
+                if (payee.length >= 3 && payee.length <= 80 &&
+                    !['rupees', 'upees', 'bearer', 'order', 'only', 'bank', 'india', 'state'].includes(payee.toLowerCase()) &&
+                    /[A-Za-z]/.test(payee)) { // Must contain at least one letter
                     data.payee = payee;
                     break;
                 }
             }
         }
 
-        // ----- 8. ACCOUNT NUMBER -----
+        // ----- 8. ACCOUNT NUMBER (Enhanced for long numeric accounts) -----
         const accPatterns = [
+            // Traditional account patterns
             /A\/?c\s*No\.?\s*:?\s*([A-Z0-9][\w\-]+)/i,
             /(ACC[\-\s]?\d{4}[\-\s]?\d{2,4})/i,
             /Account\s*(?:No\.?|Number|#)\s*:?\s*([A-Z0-9][\w\-]+)/i,
+
+            // Long numeric account numbers (10-16 digits)
+            /\b(\d{10,16})\b/,
+
+            // Account numbers with specific numeric patterns
+            /(\d{3,4}\d{3,4}\d{3,6})/,
+
+            // Account numbers near "Account" or "A/c" words
+            /(?:Account|A\/c)\s*(?:No\.?|Number)?\s*:?\s*(\d{10,16})/i,
         ];
+
         for (const pat of accPatterns) {
             const m = fullText.match(pat);
             if (m) {
-                data.accountNumber = m[1].trim();
-                break;
+                const accNum = m[1].trim();
+                // Avoid capturing amounts (typically < 10 digits) or very short numbers
+                if (accNum.length >= 6 && accNum.length <= 18) {
+                    data.accountNumber = accNum;
+                    break;
+                }
             }
         }
 
@@ -535,7 +978,19 @@ export default function ChequeScanner({ onExtracted, onClose }) {
             const micrText = lines.slice(-3).join(' ');
             const accMicr = micrText.match(/(ACC\d+)/i);
             if (accMicr) data.accountNumber = accMicr[1];
+
+            // Check for long numbers in MICR band (could be account numbers)
+            const longNumMicr = micrText.match(/(\d{10,16})/);
+            if (longNumMicr) data.accountNumber = longNumMicr[1];
         }
+
+        // Apply backup extraction to fill missing fields
+        const backupData = performBackupExtraction(fullText);
+        Object.keys(data).forEach(key => {
+            if (!data[key] && backupData[key]) {
+                data[key] = backupData[key];
+            }
+        });
 
         console.log('=== PARSED DATA ===');
         console.log(data);
@@ -544,56 +999,174 @@ export default function ChequeScanner({ onExtracted, onClose }) {
         return data;
     };
 
-    // Scan cheque using Tesseract.js with preprocessing
-    const scanCheque = async (imgSrc) => {
-        setScanning(true);
-        setScanProgress(0);
-        setScanStatus('Pre-processing image...');
+    // Backup extraction function for missed fields
+    const performBackupExtraction = (text) => {
+        const backupData = {
+            chequeNumber: '',
+            chequeBank: '',
+            chequeBranch: '',
+            chequeDate: '',
+            amount: '',
+            payee: '',
+            accountNumber: '',
+            ifsc: ''
+        };
+
+        // Simple fallback patterns
+        const lines = text.split('\n').filter(Boolean);
+
+        // Look for any 6+ digit numbers for cheque number
+        if (!backupData.chequeNumber) {
+            const numMatch = text.match(/\b(\d{6,8})\b/);
+            if (numMatch) backupData.chequeNumber = numMatch[1];
+        }
+
+        // Look for common bank keywords
+        if (!backupData.chequeBank) {
+            if (/state.*bank|sbi/i.test(text)) backupData.chequeBank = 'State Bank Of India';
+            else if (/hdfc/i.test(text)) backupData.chequeBank = 'HDFC Bank';
+            else if (/icici/i.test(text)) backupData.chequeBank = 'ICICI Bank';
+            else if (/axis/i.test(text)) backupData.chequeBank = 'Axis Bank';
+        }
+
+        // Look for any date-like patterns
+        if (!backupData.chequeDate) {
+            const dateMatch = text.match(/(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})/);
+            if (dateMatch) {
+                const [, day, month, year] = dateMatch;
+                if (parseInt(month) <= 12 && parseInt(day) <= 31) {
+                    backupData.chequeDate = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+                }
+            }
+        }
+
+        return backupData;
+    };
+
+    // Enhanced Tesseract OCR with advanced preprocessing
+    const scanChequeWithTesseract = async (imgSrc) => {
+        if (!scanning) {
+            setScanning(true);
+            setScanProgress(0);
+        }
+        setScanStatus('🔄 Enhanced Tesseract OCR - Processing image...');
         setError(null);
-        setRawOcrText('');
+        if (!rawOcrText) setRawOcrText('');
 
         try {
-            // Step 1: Pre-process the image
+            // Step 1: Pre-process the image for handwritten text
             setScanProgress(5);
             const processedImg = await preprocessImage(imgSrc);
 
-            setScanStatus('Loading OCR engine...');
+            setScanStatus('🔄 Loading Enhanced OCR engine...');
             setScanProgress(10);
 
             const Tesseract = (await import('tesseract.js')).default;
 
-            const result = await Tesseract.recognize(
-                processedImg,
-                'eng',
-                {
-                    logger: (m) => {
-                        if (m.status === 'recognizing text') {
-                            setScanProgress(20 + Math.round(m.progress * 70));
-                            setScanStatus('Scanning cheque text...');
-                        } else if (m.status === 'loading language traineddata') {
-                            setScanStatus('Loading language data...');
-                            setScanProgress(12);
-                        } else if (m.status === 'initializing api') {
-                            setScanStatus('Initializing OCR...');
-                            setScanProgress(15);
-                        }
+            // Configuration optimized for handwritten text
+            const handwrittenConfig = {
+                logger: (m) => {
+                    if (m.status === 'recognizing text') {
+                        setScanProgress(15 + Math.round(m.progress * 35)); // 15-50%
+                        setScanStatus('🔍 Scanning handwritten text...');
+                    } else if (m.status === 'loading language traineddata') {
+                        setScanStatus('📚 Loading language data...');
+                        setScanProgress(12);
+                    } else if (m.status === 'initializing api') {
+                        setScanStatus('⚙️ Initializing Enhanced OCR...');
+                        setScanProgress(13);
                     }
-                }
-            );
+                },
+                tessedit_pageseg_mode: Tesseract.PSM.AUTO,
+                tessedit_ocr_engine_mode: Tesseract.OEM.LSTM_ONLY,
+                tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.,/-: ',
+                preserve_interword_spaces: '1'
+            };
 
-            setScanStatus('Analyzing cheque fields...');
-            setScanProgress(92);
+            setScanStatus('🔍 First scan - handwritten optimized...');
+            const result1 = await Tesseract.recognize(processedImg, 'eng', handwrittenConfig);
 
-            setRawOcrText(result.data.text);
-            const extracted = parseOcrText(result.data.text);
-            setExtractedData(extracted);
+            // Second scan with different configuration for better accuracy
+            setScanStatus('🔍 Second scan - print optimized...');
+            setScanProgress(50);
+
+            const printConfig = {
+                logger: (m) => {
+                    if (m.status === 'recognizing text') {
+                        setScanProgress(50 + Math.round(m.progress * 35)); // 50-85%
+                        setScanStatus('📄 Scanning printed text...');
+                    }
+                },
+                tessedit_pageseg_mode: Tesseract.PSM.SINGLE_BLOCK,
+                tessedit_ocr_engine_mode: Tesseract.OEM.DEFAULT,
+                tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.,/-:() '
+            };
+
+            const result2 = await Tesseract.recognize(processedImg, 'eng', printConfig);
+
+            setScanStatus('🔄 Combining results and analyzing...');
+            setScanProgress(85);
+
+            // Combine both OCR results for better accuracy
+            const combinedText = result1.data.text + '\n\n--- SECOND SCAN ---\n\n' + result2.data.text;
+
+            // If this is a fallback (we already have raw text), append to it
+            if (rawOcrText) {
+                setRawOcrText(rawOcrText + '\n\n--- ENHANCED TESSERACT FALLBACK ---\n\n' + combinedText);
+            } else {
+                setRawOcrText(combinedText);
+            }
+
+            // Try parsing with both results and use the one with more extracted fields
+            const extracted1 = parseOcrText(result1.data.text);
+            const extracted2 = parseOcrText(result2.data.text);
+
+            // Count non-empty fields in each result
+            const countFields = (data) => Object.values(data).filter(val => val && val.trim()).length;
+            const count1 = countFields(extracted1);
+            const count2 = countFields(extracted2);
+
+            // Also try parsing the combined text
+            const extractedCombined = parseOcrText(combinedText);
+            const countCombined = countFields(extractedCombined);
+
+            // Use the result with the most extracted fields
+            let bestResult = extractedCombined;
+            if (count1 > countCombined && count1 > count2) {
+                bestResult = extracted1;
+            } else if (count2 > countCombined && count2 > count1) {
+                bestResult = extracted2;
+            }
+
+            // Merge results - take best field from any scan
+            const mergedResult = { ...bestResult };
+
+            // Override with better values if available
+            Object.keys(mergedResult).forEach(key => {
+                if (!mergedResult[key] && extracted1[key]) mergedResult[key] = extracted1[key];
+                if (!mergedResult[key] && extracted2[key]) mergedResult[key] = extracted2[key];
+                if (!mergedResult[key] && extractedCombined[key]) mergedResult[key] = extractedCombined[key];
+            });
+
+            const finalFieldCount = countFields(mergedResult);
+            setExtractedData(mergedResult);
             setScanProgress(100);
-            setScanStatus('Scan complete!');
+            setScanStatus(`✅ Enhanced Tesseract complete! Extracted ${finalFieldCount}/8 fields`);
+
         } catch (err) {
-            console.error('OCR Error:', err);
-            setError('Failed to scan cheque. Please try again or enter details manually.');
+            console.error('Enhanced Tesseract OCR Error:', err);
+            setError('Enhanced Tesseract OCR failed. This might be due to handwriting complexity. Please try again or enter details manually.');
         } finally {
             setScanning(false);
+        }
+    };
+
+    // Main scan handler - uses AI OCR if available, otherwise Tesseract
+    const scanCheque = async (imgSrc) => {
+        if (hasAIAvailable()) {
+            await scanChequeWithAI(imgSrc);
+        } else {
+            await scanChequeWithTesseract(imgSrc);
         }
     };
 
@@ -679,8 +1252,8 @@ export default function ChequeScanner({ onExtracted, onClose }) {
                             <HiOutlineDocumentSearch className="w-5 h-5 text-white" />
                         </div>
                         <div>
-                            <h2 className="text-lg font-bold text-gray-800">Cheque Scanner</h2>
-                            <p className="text-xs text-gray-400">Upload or scan cheque to auto-fill details</p>
+                            <h2 className="text-lg font-bold text-gray-800">Enhanced Cheque Scanner</h2>
+                            <p className="text-xs text-gray-400">Now optimized for handwritten cheques! Upload or scan to auto-fill details</p>
                         </div>
                     </div>
                     <button onClick={onClose} className="text-gray-400 hover:text-gray-600 hover:bg-gray-100 p-2 rounded-lg transition-all">
@@ -689,6 +1262,8 @@ export default function ChequeScanner({ onExtracted, onClose }) {
                 </div>
 
                 <div className="p-5 space-y-4">
+
+
                     {/* Quick Actions */}
                     {!imagePreview && !extractedData && (
                         <div className="flex gap-3 mb-2">
@@ -774,7 +1349,11 @@ export default function ChequeScanner({ onExtracted, onClose }) {
                                     </div>
                                     <div className="w-full bg-gray-100 rounded-full h-2.5 overflow-hidden">
                                         <div
-                                            className="h-full bg-gradient-to-r from-amber-400 to-orange-500 rounded-full transition-all duration-500 ease-out"
+                                            className={`h-full rounded-full transition-all duration-500 ease-out ${
+                                                aiProcessing
+                                                    ? 'bg-gradient-to-r from-blue-400 via-purple-500 to-pink-500'
+                                                    : 'bg-gradient-to-r from-amber-400 to-orange-500'
+                                            }`}
                                             style={{ width: `${scanProgress}%` }}
                                         />
                                     </div>
@@ -788,7 +1367,7 @@ export default function ChequeScanner({ onExtracted, onClose }) {
                                     className="w-full flex items-center justify-center gap-2 py-3 bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-xl hover:from-amber-600 hover:to-orange-600 transition-all shadow-lg shadow-orange-200 font-medium"
                                 >
                                     <HiOutlineCamera className="w-5 h-5" />
-                                    Scan Cheque
+                                    {hasAIAvailable() ? 'Scan with AI OCR' : 'Scan Cheque (OCR)'}
                                 </button>
                             )}
                         </div>
@@ -806,7 +1385,12 @@ export default function ChequeScanner({ onExtracted, onClose }) {
                         <div className="space-y-3 animate-fade-in">
                             <div className="flex items-center gap-2 text-green-600 mb-1">
                                 <HiOutlineCheckCircle className="w-5 h-5" />
-                                <span className="text-sm font-medium">Cheque details extracted successfully!</span>
+                                <span className="text-sm font-medium">
+                                    {rawOcrText.includes('AI OCR Results')
+                                        ? `🤖 AI extraction successful! ${rawOcrText.match(/\(([^)]+)\)/)?.[1] || 'AI'} processed`
+                                        : 'Cheque details extracted successfully!'
+                                    }
+                                </span>
                             </div>
 
                             <div className="bg-gradient-to-br from-gray-50 to-amber-50/30 rounded-xl border border-gray-200 p-4 space-y-3">
