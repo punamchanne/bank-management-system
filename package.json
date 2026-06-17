@@ -10,7 +10,7 @@
     "client": "cd client && npm run dev",
     "dev": "concurrently \"npm run server:dev\" \"npm run client\"",
     "seed": "node server/seed.js",
-    "build": "cd client && npm run build",
+    "build": "npm run install:all && cd client && npm run build",
     "start": "node server/index.js"
   },
   "dependencies": {
